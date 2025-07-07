@@ -1,0 +1,16 @@
+[package]
+name = "influencer"
+version = "0.0.1"
+edition = "2024"
+authors = ["Kira Paul <k@cyra.pink>"]
+description = "OBS WebSocket client library and CLI"
+license = "MIT"
+keywords = ["obs", "remote-control", "obs-websocket", "cli"]
+categories = ["command-line-utilities", "web-programming::websocket"]
+
+[dependencies]
+base64ct = { version = "1.8.0", features = ["alloc"] }
+clap = { version = "4.5.40", features = ["cargo", "env"] }
+serde_json = "1.0.140"
+sha2 = "0.10.9"
+tungstenite = "0.27.0"
