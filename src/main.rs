@@ -1,6 +1,10 @@
 use clap::{Arg, ArgMatches, Command, value_parser};
-use influencer::ObsSocket;
-use std::{io, net::TcpStream};
+use influencer::{ObsSocket, message};
+use serde::Serialize;
+use std::{
+    io::{self, stdout},
+    net::TcpStream,
+};
 
 fn main() {
     fn parse_req_data(s: &str) -> serde_json::Result<serde_json::Value> {
@@ -52,17 +56,27 @@ fn main() {
     let matches = command.get_matches();
     match matches.subcommand() {
         Some(("request", sub_matches)) => {
-            let req_type: &String = sub_matches.get_one("req_type").unwrap();
-            let data: Option<&serde_json::Value> = sub_matches.get_one("data");
+            let request_type = sub_matches.get_one::<String>("req_type").unwrap();
+            let request_data: Option<&serde_json::Value> =
+                sub_matches.get_one::<serde_json::Value>("data");
             let mut obs = connect(&matches);
             let sub = obs.subscribe();
-            obs.write_request_msg(req_type, "0", data).unwrap();
+            let request_id = obs.generate_id();
+            obs.write_msg(&message::RequestData {
+                request_type,
+                request_id: &request_id,
+                request_data,
+            })
+            .unwrap();
             obs.flush_if_needed().unwrap();
-            let (status, data) = obs.get_response_msg(sub, "0").unwrap();
-            println!("status {}", status);
-            if let Some(data) = data {
-                println!("data {}", data)
-            }
+            let (info, data) = obs
+                .get_request_response_for_id::<serde_json::Value>(sub, &request_id)
+                .unwrap();
+            let data = data.unwrap();
+            message::RequestResponseData::from_info_w_data(info, data)
+                .serialize(&mut serde_json::Serializer::pretty(stdout()))
+                .unwrap();
+            obs.ack_message(sub);
         }
         _ => unreachable!(),
     }
@@ -79,10 +93,10 @@ fn connect(matches: &ArgMatches) -> ObsSocket<TcpStream> {
     let sub = obs.subscribe();
     loop {
         match obs.step_auth(sub, secret) {
-            Ok(true) => {
+            Ok(influencer::Readyness::Ready) => {
                 break;
             }
-            Ok(false) => {}
+            Ok(_) => {}
             Err(tungstenite::Error::Io(err)) => match err.kind() {
                 io::ErrorKind::WouldBlock => panic!("Stream is in nonblocking mode"),
                 _ => panic!("IO error: {}", err),
