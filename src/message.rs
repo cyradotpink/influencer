@@ -2,51 +2,6 @@ use std::marker::PhantomData;
 
 use serde::{Deserialize, Deserializer, Serialize, de, ser::SerializeMap};
 
-pub trait AsRawMessage {
-    type Target: Serialize;
-    fn as_raw_message(&self) -> RawMessage<&Self::Target>;
-}
-macro_rules! make_as_raw_message_fn {
-    ($op:literal) => {
-        type Target = Self;
-        fn as_raw_message(&self) -> RawMessage<&Self> {
-            RawMessage { op: $op, d: self }
-        }
-    };
-}
-impl<T: Serialize> AsRawMessage for RawMessage<T> {
-    type Target = T;
-    fn as_raw_message(&self) -> RawMessage<&T> {
-        RawMessage {
-            op: self.op,
-            d: &self.d,
-        }
-    }
-}
-impl<'a> AsRawMessage for HelloData<'a> {
-    make_as_raw_message_fn!(0);
-}
-impl AsRawMessage for ReidentifyData {
-    make_as_raw_message_fn!(3);
-}
-impl<'a, T: Serialize> AsRawMessage for RequestData<'a, T> {
-    make_as_raw_message_fn!(6);
-}
-impl<'a, T: Serialize> AsRawMessage for RequestBatchData<'a, T> {
-    make_as_raw_message_fn!(8);
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PhantomDeserialize;
-impl<'a, 'de> Deserialize<'de> for &'a PhantomDeserialize {
-    fn deserialize<D>(_: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(&PhantomDeserialize)
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HelloDataAuthentication<'a> {
@@ -89,14 +44,14 @@ pub struct EventDataPartialInfo<'a> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventDataPartialData<T> {
-    pub event_data: T,
+    pub event_data: Option<T>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventData<'a, T> {
     pub event_type: &'a str,
     pub event_intent: u32,
-    pub event_data: T,
+    pub event_data: Option<T>,
 }
 impl<'a, T> EventData<'a, T> {
     pub fn from_parts(info: EventDataPartialInfo<'a>, data: EventDataPartialData<T>) -> Self {
@@ -105,6 +60,9 @@ impl<'a, T> EventData<'a, T> {
             event_intent: info.event_intent,
             event_data: data.event_data,
         }
+    }
+    pub fn from_info_w_data(info: EventDataPartialInfo<'a>, data: Option<T>) -> Self {
+        Self::from_parts(info, EventDataPartialData { event_data: data })
     }
 }
 
@@ -155,11 +113,11 @@ impl<'a, T> RequestResponseData<'a, T> {
             response_data: data.response_data,
         }
     }
-    pub fn from_info_w_data(info: RequestResponseDataPartialInfo<'a>, data: T) -> Self {
+    pub fn from_info_w_data(info: RequestResponseDataPartialInfo<'a>, data: Option<T>) -> Self {
         Self::from_parts(
             info,
             RequestResponseDataPartialData {
-                response_data: Some(data),
+                response_data: data,
             },
         )
     }
@@ -341,4 +299,38 @@ impl<'de, Data: Deserialize<'de>> de::Visitor<'de> for MessageDataVisitor<Data> 
             None => Err(de::Error::missing_field("d")),
         }
     }
+}
+
+pub trait AsRawMessage {
+    type Target: Serialize;
+    fn as_raw_message(&self) -> RawMessage<&Self::Target>;
+}
+macro_rules! make_as_raw_message_fn {
+    ($op:literal) => {
+        type Target = Self;
+        fn as_raw_message(&self) -> RawMessage<&Self> {
+            RawMessage { op: $op, d: self }
+        }
+    };
+}
+impl<T: Serialize> AsRawMessage for RawMessage<T> {
+    type Target = T;
+    fn as_raw_message(&self) -> RawMessage<&T> {
+        RawMessage {
+            op: self.op,
+            d: &self.d,
+        }
+    }
+}
+impl<'a> AsRawMessage for HelloData<'a> {
+    make_as_raw_message_fn!(0);
+}
+impl AsRawMessage for ReidentifyData {
+    make_as_raw_message_fn!(3);
+}
+impl<'a, T: Serialize> AsRawMessage for RequestData<'a, T> {
+    make_as_raw_message_fn!(6);
+}
+impl<'a, T: Serialize> AsRawMessage for RequestBatchData<'a, T> {
+    make_as_raw_message_fn!(8);
 }
