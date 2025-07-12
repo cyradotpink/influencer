@@ -2,12 +2,35 @@
 
 OBS WebSocket CLI and Rust library.
 
-I made this because OBS hotkeys don't work globally on Wayland right now. This way I can register command-executing shortcuts in my system instead.
+I made this because OBS hotkeys don't work globally on Wayland (yet). With this tool, I can register command-executing system shortcuts as a workaround.
 
 ## CLI Usage
 
-Run `influencer help`. You'll figure out the rest. Only sending requests (and receiving the response) is supported right now. See [OBS's documentation](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md) for a list of request types and shapes. If you're a Nushell user, the wrapper command in `obs-request.nu` might be useful to you. The tool handles connection errors by panicking. Sorry.
+Run `influencer help`. The CLI describes itself relatively well. Currently, you can send a request (and receive the response) or receive events. See [OBS's documentation](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md) for a lists of request/event types.
+
+### Examples
+```sh
+# Saving OBS's active replay buffer
+influencer --ws-password p4ssw0rd request SaveReplayBuffer
+```
+
+```sh
+# Configuring the connection using environment variables
+export OBS_WS_ADDRESS="127.0.0.1"
+export OBS_WS_PORT="6969"
+export OBS_WS_PASSWORD="p4ssw0rd"
+# Setting a named input's volume to -10dB
+influencer request SetInputVolume \
+    '{"inputName": "Desktop Audio", "inputVolumeDb": -10}'
+```
+
+```sh
+# Listening for the default set of event types,
+# using a compact (single-line) JSON representation
+# for each event emitted to stdout
+influencer --compact events
+```
 
 ## Library Usage
 
-There's no documentation right now. Sorry again. The level of abstraction (and amount of effort) is relatively low, there's no fancy code generation or anything like that. The goal was to create a minimal synchronous API that's general enough to build further abstractions - including non-blocking and async ones - on top of. A major issue to be aware of is that if you register multiple subscribers, but one subscriber stops consuming messages while others continue, all messages that at least one subscriber hasn't acknowledged stay buffered forever. So be careful or fix my code I guess.
+No documentation right now because the API isn't fully baked yet.

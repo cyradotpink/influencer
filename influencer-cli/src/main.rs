@@ -31,13 +31,13 @@ fn main() {
                 .help("OBS websocket port."),
         )
         .arg(
-            Arg::new("ws-secret")
-                .value_name("WS secret")
-                .long("ws-secret")
+            Arg::new("ws-password")
+                .value_name("WS password")
+                .long("ws-password")
                 .short('s')
-                .env("OBS_WS_SECRET")
+                .env("OBS_WS_PASSWORD")
                 .hide_env_values(true)
-                .help("OBS websocket secret."),
+                .help("OBS websocket password."),
         )
         .arg(
             Arg::new("compact")
@@ -67,6 +67,7 @@ fn main() {
                 Arg::new("event_subs")
                     .value_name("event subscriptions")
                     .help("Event types bitmask")
+                    .default_value("1023")
                     .value_parser(value_parser!(u32)),
             ),
         );
@@ -141,14 +142,14 @@ fn json_serialize<T: Serialize, W: Write>(
 fn connect(matches: &ArgMatches) -> ObsSocket<TcpStream> {
     let addr: &String = matches.get_one("ws-addr").unwrap();
     let port: &u16 = matches.get_one("ws-port").unwrap();
-    let secret = matches.get_one::<String>("ws-secret").map(|v| v.as_str());
+    let password = matches.get_one::<String>("ws-password").map(|v| v.as_str());
     let stream = TcpStream::connect((addr.as_str(), *port)).expect("TCP connection failed");
     let (ws, _res) = tungstenite::client::client(&format!("ws://{}:{}", addr, port), stream)
         .expect("WebSocket handshake failed");
     let mut obs = ObsSocket::new(ws);
     let sub = obs.subscribe();
     loop {
-        match obs.step_auth(sub, secret) {
+        match obs.step_auth(sub, password) {
             Ok(influencer::Readyness::Ready) => {
                 break;
             }
