@@ -204,6 +204,19 @@ impl<Stream: Read + Write> ObsSocket<Stream> {
         }
         Ok(())
     }
+    pub fn next_response_for_batch_request_id(
+        &mut self,
+        cursor_id: usize,
+        req_id: &str,
+    ) -> Result<(), tungstenite::Error> {
+        while match self.get_buffered_response_batch_message(cursor_id) {
+            Some(msg) => msg.request_id != req_id,
+            None => true,
+        } {
+            self.ack_get_message_raw(cursor_id)?;
+        }
+        Ok(())
+    }
     pub fn write_msg_plain(&mut self, msg: WsMessage) -> Result<(), tungstenite::Error> {
         self.ws.write(msg)?;
         self.unflushed = true;
@@ -218,7 +231,7 @@ impl<Stream: Read + Write> ObsSocket<Stream> {
         let msg = serde_json::to_string(&msg).unwrap();
         self.write_msg_plain(WsMessage::text(msg))
     }
-    pub fn flush_if_needed(&mut self) -> Result<bool, tungstenite::Error> {
+    pub fn flush(&mut self) -> Result<bool, tungstenite::Error> {
         if !self.unflushed {
             return Ok(false);
         }
@@ -234,7 +247,7 @@ impl<Stream: Read + Write> ObsSocket<Stream> {
         if matches!(&self.auth_state, AuthState::Identified) {
             return Ok(Readyness::Ready);
         }
-        if self.flush_if_needed()? {
+        if self.flush()? {
             return Ok(self.auth_state.to_readyness());
         }
         let password = password.unwrap_or("");

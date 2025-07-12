@@ -185,8 +185,7 @@ pub mod response_batch {
     pub struct ResultsPart<T> {
         pub results: T,
     }
-    pub type RequestBatchResponseDataPartialResultsVec<'a, T> =
-        ResultsPart<Vec<ResultsItem<'a, T>>>;
+    pub type ResultsPartVec<'a, T> = ResultsPart<Vec<ResultsItem<'a, T>>>;
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
