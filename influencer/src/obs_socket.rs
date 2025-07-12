@@ -33,9 +33,9 @@ impl AuthState {
 }
 
 macro_rules! make_get_message_fn {
-    ($name:ident, $buffered_name:ident, $msg_variant:ident, $data_type:ident) => {
+    ($name:ident, $buffered_name:ident, $msg_variant:ident, $data_type:path) => {
         #[allow(mismatched_lifetime_syntaxes)]
-        pub fn $buffered_name(&self, cursor_id: usize) -> Option<message::$data_type> {
+        pub fn $buffered_name(&self, cursor_id: usize) -> Option<$data_type> {
             let msg = self.get_buffered_valid_message(cursor_id)?;
             match msg {
                 crate::message::ServerMessage::$msg_variant(data) => Some(data),
@@ -147,42 +147,47 @@ impl<Stream: Read + Write> ObsSocket<Stream> {
         }
         Ok(())
     }
-    make_get_message_fn!(next_hello_msg, get_buffered_hello_msg, Hello, HelloData);
+    make_get_message_fn!(
+        next_hello_msg,
+        get_buffered_hello_msg,
+        Hello,
+        message::Hello
+    );
     make_get_message_fn!(
         next_identified_message,
         get_buffered_identified_message,
         Identified,
-        IdentifiedData
+        message::Identified
     );
     make_get_message_fn!(
         next_event_message,
         get_buffered_event_message,
         Event,
-        EventDataPartialInfo
+        message::event::InfoPart
     );
     make_get_message_fn!(
-        next_request_response_message,
-        get_buffered_request_response_message,
+        next_response_message,
+        get_buffered_response_message,
         RequestResponse,
-        RequestResponseDataPartialInfo
+        message::response::InfoPart
     );
     make_get_message_fn!(
-        next_request_batch_response_message,
-        get_buffered_request_batch_response_message,
+        next_response_batch_message,
+        get_buffered_response_batch_message,
         RequestBatchResponse,
-        RequestBatchResponseDataPartialInfo
+        message::response_batch::InfoPart
     );
-    pub fn get_buffered_request_response<'a, T: Deserialize<'a>>(
+    pub fn get_buffered_response<'a, T: Deserialize<'a>>(
         &'a self,
         cursor_id: usize,
     ) -> Option<(
-        message::RequestResponseDataPartialInfo<'a>,
+        message::response::InfoPart<'a>,
         Result<Option<T>, serde_json::Error>,
     )> {
-        let info = self.get_buffered_request_response_message(cursor_id)?;
-        let data = serde_json::from_str::<
-            message::RawMessagePartialD<message::RequestResponseDataPartialData<T>>,
-        >(self.get_buffered_text_message(cursor_id).unwrap())
+        let info = self.get_buffered_response_message(cursor_id)?;
+        let data = serde_json::from_str::<message::raw::DPart<message::response::DataPart<T>>>(
+            self.get_buffered_text_message(cursor_id).unwrap(),
+        )
         .map(|v| v.d.response_data);
         Some((info, data))
     }
@@ -191,7 +196,7 @@ impl<Stream: Read + Write> ObsSocket<Stream> {
         cursor_id: usize,
         req_id: &str,
     ) -> Result<(), tungstenite::Error> {
-        while match self.get_buffered_request_response_message(cursor_id) {
+        while match self.get_buffered_response_message(cursor_id) {
             Some(msg) => msg.request_id != req_id,
             None => true,
         } {
@@ -259,12 +264,12 @@ impl<Stream: Read + Write> ObsSocket<Stream> {
                     let auth_string = base64ct::Base64::encode_string(&auth_string);
                     authentication = Some(auth_string);
                 }
-                let data = message::IdentifyData {
+                let data = message::Identify {
                     rpc_version: 1,
                     authentication: authentication.as_ref().map(|v| v.as_str()),
                     event_subscriptions: Some(0),
                 };
-                let msg = serde_json::to_string(&message::RawMessage { op: 1, d: data }).unwrap();
+                let msg = serde_json::to_string(&message::Raw { op: 1, d: data }).unwrap();
                 self.write_msg_plain(WsMessage::text(msg))?;
                 AuthState::IdentifySent
             }

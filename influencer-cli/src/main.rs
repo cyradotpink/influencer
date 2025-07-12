@@ -81,7 +81,7 @@ fn main() {
             let mut obs = connect(&matches);
             let sub = obs.subscribe();
             let request_id = obs.generate_id();
-            obs.write_msg(&message::RequestData {
+            obs.write_msg(&message::Request {
                 request_type,
                 request_id: &request_id,
                 request_data,
@@ -89,11 +89,9 @@ fn main() {
             .unwrap();
             obs.flush_if_needed().unwrap();
             obs.next_response_for_request_id(sub, &request_id).unwrap();
-            let (info, data) = obs
-                .get_buffered_request_response::<serde_json::Value>(sub)
-                .unwrap();
+            let (info, data) = obs.get_buffered_response::<serde_json::Value>(sub).unwrap();
             let data = data.unwrap();
-            let response = message::RequestResponseData::from_info_w_data(info, data);
+            let response = message::Response::from_info_w_data(info, data);
             json_print(pretty, &response).unwrap();
             obs.ack_message(sub);
         }
@@ -101,7 +99,7 @@ fn main() {
             let event_subscriptions = sub_matches.get_one::<u32>("event_subs").copied();
             let mut obs = connect(&matches);
             let sub = obs.subscribe();
-            obs.write_msg(&message::ReidentifyData {
+            obs.write_msg(&message::Reidentify {
                 event_subscriptions,
             })
             .unwrap();
@@ -109,10 +107,10 @@ fn main() {
             while let Ok(_) = obs.next_event_message(sub) {
                 let info = obs.get_buffered_event_message(sub).unwrap();
                 let data = serde_json::from_str::<
-                    message::RawMessagePartialD<message::EventDataPartialData<serde_json::Value>>,
+                    message::raw::DPart<message::event::DataPart<serde_json::Value>>,
                 >(obs.get_buffered_text_message(sub).unwrap())
                 .unwrap();
-                let event = message::EventData::from_parts(info, data.d);
+                let event = message::Event::from_parts(info, data.d);
                 json_print(pretty, &event).unwrap();
                 obs.ack_message(sub);
             }

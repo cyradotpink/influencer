@@ -2,22 +2,25 @@ use std::marker::PhantomData;
 
 use serde::{Deserialize, Deserializer, Serialize, de, ser::SerializeMap};
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HelloDataAuthentication<'a> {
-    pub challenge: &'a str,
-    pub salt: &'a str,
+pub mod hello {
+    use super::*;
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Authentication<'a> {
+        pub challenge: &'a str,
+        pub salt: &'a str,
+    }
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HelloData<'a> {
+pub struct Hello<'a> {
     #[serde(borrow, skip_serializing_if = "Option::is_none")]
-    pub authentication: Option<HelloDataAuthentication<'a>>,
+    pub authentication: Option<hello::Authentication<'a>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IdentifyData<'a> {
+pub struct Identify<'a> {
     pub rpc_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authentication: Option<&'a str>,
@@ -27,94 +30,97 @@ pub struct IdentifyData<'a> {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IdentifiedData {
+pub struct Identified {
     pub negotiated_rpc_version: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ReidentifyData {
+pub struct Reidentify {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_subscriptions: Option<u32>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EventDataPartialInfo<'a> {
-    pub event_type: &'a str,
-    pub event_intent: u32,
+pub mod event {
+    use super::*;
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct InfoPart<'a> {
+        pub event_type: &'a str,
+        pub event_intent: u32,
+    }
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DataPart<T> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub event_data: Option<T>,
+    }
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EventDataPartialData<T> {
+pub struct Event<'a, T> {
+    pub event_type: &'a str,
+    pub event_intent: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_data: Option<T>,
 }
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EventData<'a, T> {
-    pub event_type: &'a str,
-    pub event_intent: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_data: Option<T>,
-}
-impl<'a, T> EventData<'a, T> {
-    pub fn from_parts(info: EventDataPartialInfo<'a>, data: EventDataPartialData<T>) -> Self {
+impl<'a, T> Event<'a, T> {
+    pub fn from_parts(info: event::InfoPart<'a>, data: event::DataPart<T>) -> Self {
         Self {
             event_type: info.event_type,
             event_intent: info.event_intent,
             event_data: data.event_data,
         }
     }
-    pub fn from_info_w_data(info: EventDataPartialInfo<'a>, data: Option<T>) -> Self {
-        Self::from_parts(info, EventDataPartialData { event_data: data })
+    pub fn from_info_w_data(info: event::InfoPart<'a>, data: Option<T>) -> Self {
+        Self::from_parts(info, event::DataPart { event_data: data })
     }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RequestData<'a, T> {
+pub struct Request<'a, T> {
     pub request_type: &'a str,
     pub request_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_data: Option<T>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestResponseDataPartialInfoStatus<'a> {
-    pub result: bool,
-    pub code: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comment: Option<&'a str>,
+pub mod response {
+    use super::*;
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct RequestStatus<'a> {
+        pub result: bool,
+        pub code: i32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub comment: Option<&'a str>,
+    }
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct InfoPart<'a> {
+        pub request_type: &'a str,
+        pub request_id: &'a str,
+        pub request_status: RequestStatus<'a>,
+    }
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DataPart<T> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub response_data: Option<T>,
+    }
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RequestResponseDataPartialInfo<'a> {
+pub struct Response<'a, T> {
     pub request_type: &'a str,
     pub request_id: &'a str,
-    pub request_status: RequestResponseDataPartialInfoStatus<'a>,
-}
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestResponseDataPartialData<T> {
+    pub request_status: response::RequestStatus<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_data: Option<T>,
 }
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestResponseData<'a, T> {
-    pub request_type: &'a str,
-    pub request_id: &'a str,
-    pub request_status: RequestResponseDataPartialInfoStatus<'a>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_data: Option<T>,
-}
-impl<'a, T> RequestResponseData<'a, T> {
-    pub fn from_parts(
-        info: RequestResponseDataPartialInfo<'a>,
-        data: RequestResponseDataPartialData<T>,
-    ) -> Self {
+impl<'a, T> Response<'a, T> {
+    pub fn from_parts(info: response::InfoPart<'a>, data: response::DataPart<T>) -> Self {
         Self {
             request_type: info.request_type,
             request_id: info.request_id,
@@ -122,28 +128,31 @@ impl<'a, T> RequestResponseData<'a, T> {
             response_data: data.response_data,
         }
     }
-    pub fn from_info_w_data(info: RequestResponseDataPartialInfo<'a>, data: Option<T>) -> Self {
+    pub fn from_info_w_data(info: response::InfoPart<'a>, data: Option<T>) -> Self {
         Self::from_parts(
             info,
-            RequestResponseDataPartialData {
+            response::DataPart {
                 response_data: data,
             },
         )
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestBatchDataRequestsInner<'a, T> {
-    pub request_type: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_data: Option<T>,
+pub mod request_batch {
+    use super::*;
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct RequestsItem<'a, T> {
+        pub request_type: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_data: Option<T>,
+    }
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RequestBatchData<'a, T> {
+pub struct RequestBatch<'a, T> {
     pub request_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub halt_on_failure: Option<bool>,
@@ -151,45 +160,46 @@ pub struct RequestBatchData<'a, T> {
     pub execution_type: Option<i32>,
     pub requests: T,
 }
-pub type RequestBatchDataVec<'a, T> =
-    RequestBatchData<'a, Vec<RequestBatchDataRequestsInner<'a, T>>>;
+pub type RequestBatchVec<'a, T> = RequestBatch<'a, Vec<request_batch::RequestsItem<'a, T>>>;
 
+pub mod response_batch {
+    use super::*;
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct InfoPart<'a> {
+        pub request_id: &'a str,
+    }
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ResultsItem<'a, T> {
+        pub request_type: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<&'a str>,
+        #[serde(borrow)]
+        pub request_status: response::RequestStatus<'a>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub response_data: Option<T>,
+    }
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ResultsPart<T> {
+        pub results: T,
+    }
+    pub type RequestBatchResponseDataPartialResultsVec<'a, T> =
+        ResultsPart<Vec<ResultsItem<'a, T>>>;
+}
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RequestBatchResponseDataPartialInfo<'a> {
+pub struct ResponseBatch<'a, T> {
     pub request_id: &'a str,
-}
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestBatchResponseDataPartialResultsInner<'a, T> {
-    pub request_type: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<&'a str>,
-    #[serde(borrow)]
-    pub request_status: RequestResponseDataPartialInfoStatus<'a>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_data: Option<T>,
-}
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestBatchResponseDataPartialResults<T> {
     pub results: T,
 }
-pub type RequestBatchResponseDataPartialResultsVec<'a, T> =
-    RequestBatchResponseDataPartialResults<Vec<RequestBatchResponseDataPartialResultsInner<'a, T>>>;
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestBatchResponseData<'a, T> {
-    pub request_id: &'a str,
-    pub results: T,
-}
-pub type RequestBatchResponseDataVec<'a, T> =
-    RequestBatchResponseData<'a, Vec<RequestBatchResponseDataPartialResultsInner<'a, T>>>;
-impl<'a, T> RequestBatchResponseData<'a, T> {
+pub type RequestBatchResponseVec<'a, T> =
+    ResponseBatch<'a, Vec<response_batch::ResultsItem<'a, T>>>;
+impl<'a, T> ResponseBatch<'a, T> {
     pub fn from_parts(
-        info: RequestBatchResponseDataPartialInfo<'a>,
-        results: RequestBatchResponseDataPartialResults<T>,
+        info: response_batch::InfoPart<'a>,
+        results: response_batch::ResultsPart<T>,
     ) -> Self {
         Self {
             request_id: info.request_id,
@@ -198,35 +208,37 @@ impl<'a, T> RequestBatchResponseData<'a, T> {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RawMessagePartialOp {
-    pub op: i32,
+pub mod raw {
+    use super::*;
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct OpPart {
+        pub op: i32,
+    }
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DPart<T> {
+        pub d: T,
+    }
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RawMessagePartialD<T> {
-    pub d: T,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RawMessage<T> {
+pub struct Raw<T> {
     pub op: i32,
     pub d: T,
 }
 
 #[derive(Debug)]
 pub enum ServerMessage<'a> {
-    Hello(HelloData<'a>),
-    Identified(IdentifiedData),
-    Event(EventDataPartialInfo<'a>),
-    RequestResponse(RequestResponseDataPartialInfo<'a>),
-    RequestBatchResponse(RequestBatchResponseDataPartialInfo<'a>),
+    Hello(Hello<'a>),
+    Identified(Identified),
+    Event(event::InfoPart<'a>),
+    RequestResponse(response::InfoPart<'a>),
+    RequestBatchResponse(response_batch::InfoPart<'a>),
 }
 impl<'a> ServerMessage<'a> {
     pub fn from_json_str(json: &'a str) -> Result<ServerMessage<'a>, serde_json::Error> {
-        let op_part: RawMessagePartialOp = serde_json::from_str(json)?;
+        let op_part: raw::OpPart = serde_json::from_str(json)?;
         let mut de = serde_json::Deserializer::from_str(json);
         extract_message_data_auto(&mut de, op_part.op)
     }
@@ -271,14 +283,11 @@ where
         };
     }
     match op {
-        0 => Ok(match_op!(Hello, HelloData)),
-        2 => Ok(match_op!(Identified, IdentifiedData)),
-        5 => Ok(match_op!(Event, EventDataPartialInfo)),
-        7 => Ok(match_op!(RequestResponse, RequestResponseDataPartialInfo)),
-        9 => Ok(match_op!(
-            RequestBatchResponse,
-            RequestBatchResponseDataPartialInfo
-        )),
+        0 => Ok(match_op!(Hello, Hello)),
+        2 => Ok(match_op!(Identified, Identified)),
+        5 => Ok(match_op!(Event, event::InfoPart)),
+        7 => Ok(match_op!(RequestResponse, response::InfoPart)),
+        9 => Ok(match_op!(RequestBatchResponse, response_batch::InfoPart)),
         invalid => Err(de::Error::invalid_value(
             de::Unexpected::Signed(invalid.into()),
             &"valid OBS Server->Client message OpCode",
@@ -324,34 +333,34 @@ impl<'de, Data: Deserialize<'de>> de::Visitor<'de> for MessageDataVisitor<Data> 
 
 pub trait AsRawMessage {
     type Target: Serialize;
-    fn as_raw_message(&self) -> RawMessage<&Self::Target>;
+    fn as_raw_message(&self) -> Raw<&Self::Target>;
 }
 macro_rules! make_as_raw_message_fn {
     ($op:literal) => {
         type Target = Self;
-        fn as_raw_message(&self) -> RawMessage<&Self> {
-            RawMessage { op: $op, d: self }
+        fn as_raw_message(&self) -> Raw<&Self> {
+            Raw { op: $op, d: self }
         }
     };
 }
-impl<T: Serialize> AsRawMessage for RawMessage<T> {
+impl<T: Serialize> AsRawMessage for Raw<T> {
     type Target = T;
-    fn as_raw_message(&self) -> RawMessage<&T> {
-        RawMessage {
+    fn as_raw_message(&self) -> Raw<&T> {
+        Raw {
             op: self.op,
             d: &self.d,
         }
     }
 }
-impl<'a> AsRawMessage for HelloData<'a> {
+impl<'a> AsRawMessage for Hello<'a> {
     make_as_raw_message_fn!(0);
 }
-impl AsRawMessage for ReidentifyData {
+impl AsRawMessage for Reidentify {
     make_as_raw_message_fn!(3);
 }
-impl<'a, T: Serialize> AsRawMessage for RequestData<'a, T> {
+impl<'a, T: Serialize> AsRawMessage for Request<'a, T> {
     make_as_raw_message_fn!(6);
 }
-impl<'a, T: Serialize> AsRawMessage for RequestBatchData<'a, T> {
+impl<'a, T: Serialize> AsRawMessage for RequestBatch<'a, T> {
     make_as_raw_message_fn!(8);
 }
