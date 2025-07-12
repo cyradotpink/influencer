@@ -33,26 +33,21 @@ impl AuthState {
 }
 
 macro_rules! make_get_message_fn {
-    ($name:ident, $msg_variant:ident, $data_type:ident) => {
+    ($name:ident, $buffered_name:ident, $msg_variant:ident, $data_type:ident) => {
         #[allow(mismatched_lifetime_syntaxes)]
-        pub fn $name(
-            &mut self,
-            cursor_id: usize,
-        ) -> Result<message::$data_type, tungstenite::Error> {
-            fn internal<Stream: Read + Write>(
-                obs: &mut ObsSocket<Stream>,
-                cursor_id: usize,
-            ) -> Result<Option<message::$data_type>, tungstenite::Error> {
-                let msg = obs.get_any_valid_message(cursor_id)?;
-                match msg {
-                    crate::message::ServerMessage::$msg_variant(data) => Ok(Some(data)),
-                    _ => Ok(None),
-                }
+        pub fn $buffered_name(&self, cursor_id: usize) -> Option<message::$data_type> {
+            let msg = self.get_buffered_valid_message(cursor_id)?;
+            match msg {
+                crate::message::ServerMessage::$msg_variant(data) => Some(data),
+                _ => None,
             }
-            while internal(self, cursor_id)?.is_none() {
-                self.ack_message(cursor_id);
+        }
+        #[allow(mismatched_lifetime_syntaxes)]
+        pub fn $name(&mut self, cursor_id: usize) -> Result<(), tungstenite::Error> {
+            while self.$buffered_name(cursor_id).is_none() {
+                self.ack_get_message_raw(cursor_id)?;
             }
-            internal(self, cursor_id).map(Option::unwrap)
+            Ok(())
         }
     };
 }
@@ -100,6 +95,16 @@ impl<Stream: Read + Write> ObsSocket<Stream> {
     pub fn unsubscribe(&mut self, cursor_id: usize) {
         self.msgs.unsubscribe(cursor_id);
     }
+    pub fn get_buffered_message_raw(&self, cursor_id: usize) -> Option<&WsMessage> {
+        self.msgs.peek(cursor_id)
+    }
+    pub fn get_buffered_text_message(&self, cursor_id: usize) -> Option<&str> {
+        let msg = self.get_buffered_message_raw(cursor_id)?;
+        match msg {
+            WsMessage::Text(utf8_bytes) => Some(utf8_bytes.as_str()),
+            _ => None,
+        }
+    }
     pub fn get_message_raw(&mut self, cursor_id: usize) -> Result<&WsMessage, tungstenite::Error> {
         if self.msgs.peek(cursor_id).is_none() {
             let msg = self.ws.read()?;
@@ -110,80 +115,89 @@ impl<Stream: Read + Write> ObsSocket<Stream> {
     pub fn ack_message(&mut self, cursor_id: usize) -> bool {
         self.msgs.ack(cursor_id)
     }
-    fn get_any_valid_message_internal<'a>(
-        &'a mut self,
+    pub fn ack_get_message_raw(
+        &mut self,
         cursor_id: usize,
-    ) -> Result<Option<message::ServerMessage<'a>>, tungstenite::Error> {
-        let msg = self.get_message_raw(cursor_id)?;
-        let msg = match msg {
-            WsMessage::Text(utf8_bytes) => utf8_bytes,
-            _ => {
-                return Ok(None);
-            }
-        };
-        let msg = match message::ServerMessage::from_json_bytes(msg.as_bytes()) {
-            Ok(msg) => msg,
-            Err(_) => {
-                return Ok(None);
-            }
-        };
-        Ok(Some(msg))
+    ) -> Result<&WsMessage, tungstenite::Error> {
+        self.ack_message(cursor_id);
+        self.get_message_raw(cursor_id)
     }
-    pub fn get_any_valid_message<'a>(
-        &'a mut self,
-        cursor_id: usize,
-    ) -> Result<message::ServerMessage<'a>, tungstenite::Error> {
-        while self.get_any_valid_message_internal(cursor_id)?.is_none() {
-            self.ack_message(cursor_id);
+    pub fn get_text_message(&mut self, cursor_id: usize) -> Result<&str, tungstenite::Error> {
+        while self.get_buffered_text_message(cursor_id).is_none() {
+            self.ack_get_message_raw(cursor_id)?;
         }
-        self.get_any_valid_message_internal(cursor_id)
-            .map(Option::unwrap)
+        Ok(self.get_buffered_text_message(cursor_id).unwrap())
     }
-    make_get_message_fn!(get_hello_msg, Hello, HelloData);
-    make_get_message_fn!(get_identified_msg, Identified, IdentifiedData);
-    make_get_message_fn!(get_event_msg, Event, EventDataPartialInfo);
+    fn get_buffered_valid_message<'a>(
+        &'a self,
+        cursor_id: usize,
+    ) -> Option<message::ServerMessage<'a>> {
+        let msg = self.get_buffered_text_message(cursor_id)?;
+        match message::ServerMessage::from_json_str(msg) {
+            Ok(msg) => Some(msg),
+            Err(_) => None,
+        }
+    }
+    pub fn next_valid_message<'a>(
+        &'a mut self,
+        cursor_id: usize,
+    ) -> Result<(), tungstenite::Error> {
+        while self.get_buffered_valid_message(cursor_id).is_none() {
+            self.ack_get_message_raw(cursor_id)?;
+        }
+        Ok(())
+    }
+    make_get_message_fn!(next_hello_msg, get_buffered_hello_msg, Hello, HelloData);
     make_get_message_fn!(
-        get_request_response_msg,
+        next_identified_message,
+        get_buffered_identified_message,
+        Identified,
+        IdentifiedData
+    );
+    make_get_message_fn!(
+        next_event_message,
+        get_buffered_event_message,
+        Event,
+        EventDataPartialInfo
+    );
+    make_get_message_fn!(
+        next_request_response_message,
+        get_buffered_request_response_message,
         RequestResponse,
         RequestResponseDataPartialInfo
     );
     make_get_message_fn!(
-        get_request_batch_response_msg,
+        next_request_batch_response_message,
+        get_buffered_request_batch_response_message,
         RequestBatchResponse,
         RequestBatchResponseDataPartialInfo
     );
-    pub fn get_request_response_for_id<'de, T: Deserialize<'de>>(
-        &'de mut self,
+    pub fn get_buffered_request_response<'a, T: Deserialize<'a>>(
+        &'a self,
+        cursor_id: usize,
+    ) -> Option<(
+        message::RequestResponseDataPartialInfo<'a>,
+        Result<Option<T>, serde_json::Error>,
+    )> {
+        let info = self.get_buffered_request_response_message(cursor_id)?;
+        let data = serde_json::from_str::<
+            message::RawMessagePartialD<message::RequestResponseDataPartialData<T>>,
+        >(self.get_buffered_text_message(cursor_id).unwrap())
+        .map(|v| v.d.response_data);
+        Some((info, data))
+    }
+    pub fn next_response_for_request_id(
+        &mut self,
         cursor_id: usize,
         req_id: &str,
-    ) -> Result<
-        (
-            message::RequestResponseDataPartialInfo<'de>,
-            Result<Option<T>, serde_json::Error>,
-        ),
-        tungstenite::Error,
-    > {
-        loop {
-            let info = self.get_request_response_msg(cursor_id)?;
-            if info.request_id == req_id {
-                break;
-            }
-            self.ack_message(cursor_id);
+    ) -> Result<(), tungstenite::Error> {
+        while match self.get_buffered_request_response_message(cursor_id) {
+            Some(msg) => msg.request_id != req_id,
+            None => true,
+        } {
+            self.ack_get_message_raw(cursor_id)?;
         }
-        let msg_bytes = match self.get_message_raw(cursor_id).unwrap() {
-            WsMessage::Text(utf8_bytes) => utf8_bytes.as_bytes(),
-            _ => unreachable!(),
-        };
-        let info = serde_json::from_slice::<
-            message::RawMessagePartialD<message::RequestResponseDataPartialInfo>,
-        >(msg_bytes)
-        .unwrap()
-        .d;
-        let data = serde_json::from_slice::<
-            message::RawMessagePartialD<message::RequestResponseDataPartialData<T>>,
-        >(msg_bytes)
-        .map(|v| v.d.response_data);
-        Ok((info, data))
+        Ok(())
     }
     pub fn write_msg_plain(&mut self, msg: WsMessage) -> Result<(), tungstenite::Error> {
         self.ws.write(msg)?;
@@ -221,7 +235,8 @@ impl<Stream: Read + Write> ObsSocket<Stream> {
         let password = password.unwrap_or("");
         let new_state = match &self.auth_state {
             AuthState::None => {
-                let msg = self.get_hello_msg(cursor_id)?;
+                self.next_hello_msg(cursor_id)?;
+                let msg = self.get_buffered_hello_msg(cursor_id).unwrap();
                 let auth = msg
                     .authentication
                     .map(|v| (v.challenge.to_owned(), v.salt.to_owned()));
@@ -254,7 +269,7 @@ impl<Stream: Read + Write> ObsSocket<Stream> {
                 AuthState::IdentifySent
             }
             AuthState::IdentifySent => {
-                self.get_identified_msg(cursor_id)?;
+                self.next_identified_message(cursor_id)?;
                 AuthState::Identified
             }
             AuthState::Identified => unreachable!(),

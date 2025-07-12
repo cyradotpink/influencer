@@ -11,7 +11,7 @@ pub struct HelloDataAuthentication<'a> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HelloData<'a> {
-    #[serde(borrow)]
+    #[serde(borrow, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<HelloDataAuthentication<'a>>,
 }
 
@@ -19,7 +19,9 @@ pub struct HelloData<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct IdentifyData<'a> {
     pub rpc_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub authentication: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub event_subscriptions: Option<u32>,
 }
 
@@ -32,6 +34,7 @@ pub struct IdentifiedData {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReidentifyData {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub event_subscriptions: Option<u32>,
 }
 
@@ -44,6 +47,7 @@ pub struct EventDataPartialInfo<'a> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventDataPartialData<T> {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub event_data: Option<T>,
 }
 #[derive(Debug, Deserialize, Serialize)]
@@ -51,6 +55,7 @@ pub struct EventDataPartialData<T> {
 pub struct EventData<'a, T> {
     pub event_type: &'a str,
     pub event_intent: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub event_data: Option<T>,
 }
 impl<'a, T> EventData<'a, T> {
@@ -71,6 +76,7 @@ impl<'a, T> EventData<'a, T> {
 pub struct RequestData<'a, T> {
     pub request_type: &'a str,
     pub request_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_data: Option<T>,
 }
 
@@ -79,6 +85,7 @@ pub struct RequestData<'a, T> {
 pub struct RequestResponseDataPartialInfoStatus<'a> {
     pub result: bool,
     pub code: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<&'a str>,
 }
 #[derive(Debug, Deserialize, Serialize)]
@@ -91,6 +98,7 @@ pub struct RequestResponseDataPartialInfo<'a> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestResponseDataPartialData<T> {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_data: Option<T>,
 }
 #[derive(Debug, Deserialize, Serialize)]
@@ -99,6 +107,7 @@ pub struct RequestResponseData<'a, T> {
     pub request_type: &'a str,
     pub request_id: &'a str,
     pub request_status: RequestResponseDataPartialInfoStatus<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_data: Option<T>,
 }
 impl<'a, T> RequestResponseData<'a, T> {
@@ -127,17 +136,23 @@ impl<'a, T> RequestResponseData<'a, T> {
 #[serde(rename_all = "camelCase")]
 pub struct RequestBatchDataRequestsInner<'a, T> {
     pub request_type: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_data: Option<T>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestBatchData<'a, T> {
     pub request_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub halt_on_failure: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_type: Option<i32>,
-    pub requests: Vec<RequestBatchDataRequestsInner<'a, T>>,
+    pub requests: T,
 }
+pub type RequestBatchDataVec<'a, T> =
+    RequestBatchData<'a, Vec<RequestBatchDataRequestsInner<'a, T>>>;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,27 +163,33 @@ pub struct RequestBatchResponseDataPartialInfo<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct RequestBatchResponseDataPartialResultsInner<'a, T> {
     pub request_type: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<&'a str>,
     #[serde(borrow)]
     pub request_status: RequestResponseDataPartialInfoStatus<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_data: Option<T>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RequestBatchResponseDataPartialResults<'a, T> {
-    #[serde(borrow)]
-    pub results: Vec<RequestBatchResponseDataPartialResultsInner<'a, T>>,
+pub struct RequestBatchResponseDataPartialResults<T> {
+    pub results: T,
 }
+pub type RequestBatchResponseDataPartialResultsVec<'a, T> =
+    RequestBatchResponseDataPartialResults<Vec<RequestBatchResponseDataPartialResultsInner<'a, T>>>;
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestBatchResponseData<'a, T> {
     pub request_id: &'a str,
-    pub results: Vec<RequestBatchResponseDataPartialResultsInner<'a, T>>,
+    pub results: T,
 }
+pub type RequestBatchResponseDataVec<'a, T> =
+    RequestBatchResponseData<'a, Vec<RequestBatchResponseDataPartialResultsInner<'a, T>>>;
 impl<'a, T> RequestBatchResponseData<'a, T> {
     pub fn from_parts(
         info: RequestBatchResponseDataPartialInfo<'a>,
-        results: RequestBatchResponseDataPartialResults<'a, T>,
+        results: RequestBatchResponseDataPartialResults<T>,
     ) -> Self {
         Self {
             request_id: info.request_id,
@@ -204,9 +225,9 @@ pub enum ServerMessage<'a> {
     RequestBatchResponse(RequestBatchResponseDataPartialInfo<'a>),
 }
 impl<'a> ServerMessage<'a> {
-    pub fn from_json_bytes(json: &'a [u8]) -> Result<ServerMessage<'a>, serde_json::Error> {
-        let op_part: RawMessagePartialOp = serde_json::from_slice(json)?;
-        let mut de = serde_json::Deserializer::from_slice(json);
+    pub fn from_json_str(json: &'a str) -> Result<ServerMessage<'a>, serde_json::Error> {
+        let op_part: RawMessagePartialOp = serde_json::from_str(json)?;
+        let mut de = serde_json::Deserializer::from_str(json);
         extract_message_data_auto(&mut de, op_part.op)
     }
     pub fn opcode(&self) -> i32 {

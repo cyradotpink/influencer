@@ -1,0 +1,16 @@
+[package]
+name = "influencer"
+description = "OBS WebSocket client library"
+keywords = ["obs", "remote-control", "obs-websocket"]
+categories = ["web-programming::websocket"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+base64ct = { version = "1.8.0", features = ["alloc"] }
+sha2 = "0.10.9"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tungstenite.workspace = true

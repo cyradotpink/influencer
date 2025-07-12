@@ -1,0 +1,20 @@
+[package]
+name = "influencer-cli"
+description = "OBS WebSocket client CLI"
+keywords = ["obs", "remote-control", "obs-websocket", "cli"]
+categories = ["command-line-utilities", "web-programming::websocket"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "influencer"
+path = "src/main.rs"
+
+[dependencies]
+influencer = { path = "../influencer" }
+clap = { version = "4.5.40", features = ["cargo", "env"] }
+serde.workspace = true
+serde_json.workspace = true
+tungstenite.workspace = true

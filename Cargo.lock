@@ -203,10 +203,20 @@ name = "influencer"
 version = "0.0.1"
 dependencies = [
  "base64ct",
- "clap",
  "serde",
  "serde_json",
  "sha2",
+ "tungstenite",
+]
+
+[[package]]
+name = "influencer-cli"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "influencer",
+ "serde",
+ "serde_json",
  "tungstenite",
 ]
 
