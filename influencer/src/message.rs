@@ -1,6 +1,94 @@
+use serde::{Deserialize, Serialize, de};
 use std::marker::PhantomData;
+use tungstenite::Message as WsMessage;
 
-use serde::{Deserialize, Deserializer, Serialize, de, ser::SerializeMap};
+trait KBoolExt {
+    fn k_ok_or_else<E, F: FnOnce() -> E>(self, f: F) -> Result<(), E>;
+}
+impl KBoolExt for bool {
+    fn k_ok_or_else<E, F: FnOnce() -> E>(self, f: F) -> Result<(), E> {
+        if self { Ok(()) } else { Err(f()) }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DecodeError {
+    #[error("unexpected opcode ({0})")]
+    OpCodeMismatch(i32),
+    #[error("not a text message")]
+    NotText,
+    #[error("json deserialize failed ({0})")]
+    Json(#[from] serde_json::Error),
+}
+
+pub trait MessageData: Sized {
+    const OP: i32;
+}
+pub trait MessageDataInfo: MessageData {
+    fn from_raw_message(raw: Raw<Self>) -> Result<Self, DecodeError> {
+        (raw.op == Self::OP)
+            .k_ok_or_else(|| DecodeError::OpCodeMismatch(raw.op))
+            .map(|_| raw.d)
+    }
+}
+pub trait FromWsMessageJson<'a>: Sized {
+    fn from_ws_message_json(msg: &'a WsMessage) -> Result<Self, DecodeError>;
+}
+impl<'de, T: Deserialize<'de> + MessageDataInfo> FromWsMessageJson<'de> for T {
+    fn from_ws_message_json(msg: &'de WsMessage) -> Result<Self, DecodeError> {
+        let raw = Raw::from_ws_message_json(msg)?;
+        Self::from_raw_message(raw)
+    }
+}
+pub trait MessageDataFull: MessageData {
+    fn into_raw_message(self) -> Raw<Self> {
+        Raw {
+            op: Self::OP,
+            d: self,
+        }
+    }
+}
+pub trait IntoWsMessageJson {
+    fn into_ws_message_json(self) -> Result<WsMessage, serde_json::Error>;
+}
+impl<T: Serialize + MessageDataFull> IntoWsMessageJson for T {
+    fn into_ws_message_json(self) -> Result<WsMessage, serde_json::Error> {
+        self.into_raw_message().to_ws_message_json()
+    }
+}
+impl<T: MessageDataFull> MessageDataInfo for T {}
+macro_rules! impl_message_data {
+    (impl<$($gen:tt),*> $type:ty, $op:literal) => {
+        impl<$($gen),*> MessageData for $type {
+            const OP: i32 = $op;
+        }
+    };
+    ($type:ty, $op:literal) => {
+        impl MessageData for $type {
+            const OP: i32 = $op;
+        }
+    };
+}
+macro_rules! impl_message_data_full {
+    (impl<$($gen:tt),*> $type:ty, $op:literal) => {
+        impl_message_data!(impl<$($gen),*> $type, $op);
+        impl<$($gen),*> MessageDataFull for $type {}
+    };
+    ($type:ty, $op:literal) => {
+        impl_message_data!($type, $op);
+        impl MessageDataFull for $type {}
+    };
+}
+macro_rules! impl_message_data_info {
+    (impl<$($gen:tt),*> $type:ty, $op:literal) => {
+        impl_message_data!(impl<$($gen),*> $type, $op);
+        impl<$($gen),*> MessageDataInfo for $type {}
+    };
+    ($type:ty, $op:literal) => {
+        impl_message_data!($type, $op);
+        impl MessageDataInfo for $type {}
+    };
+}
 
 pub mod hello {
     use super::*;
@@ -17,6 +105,7 @@ pub struct Hello<'a> {
     #[serde(borrow, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<hello::Authentication<'a>>,
 }
+impl_message_data_full!(Hello<'_>, 0);
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,12 +116,14 @@ pub struct Identify<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_subscriptions: Option<u32>,
 }
+impl_message_data_full!(Identify<'_>, 1);
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Identified {
     pub negotiated_rpc_version: u32,
 }
+impl_message_data_full!(Identified, 2);
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +131,7 @@ pub struct Reidentify {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_subscriptions: Option<u32>,
 }
+impl_message_data_full!(Reidentify, 3);
 
 pub mod event {
     use super::*;
@@ -49,12 +141,14 @@ pub mod event {
         pub event_type: &'a str,
         pub event_intent: u32,
     }
+    impl_message_data_info!(InfoPart<'_>, 5);
     #[derive(Debug, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct DataPart<T> {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub event_data: Option<T>,
     }
+    impl_message_data!(impl<T> DataPart<T>, 5);
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +170,8 @@ impl<'a, T> Event<'a, T> {
         Self::from_parts(info, event::DataPart { event_data: data })
     }
 }
+pub type AnyEvent<'a> = Event<'a, serde_json::Value>;
+impl_message_data_full!(impl<T> Event<'_, T>, 5);
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,6 +181,7 @@ pub struct Request<'a, T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_data: Option<T>,
 }
+impl_message_data_full!(impl<T> Request<'_, T>, 6);
 
 pub mod response {
     use super::*;
@@ -103,12 +200,14 @@ pub mod response {
         pub request_id: &'a str,
         pub request_status: RequestStatus<'a>,
     }
+    impl_message_data_info!(InfoPart<'_>, 7);
     #[derive(Debug, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct DataPart<T> {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub response_data: Option<T>,
     }
+    impl_message_data!(impl<T> DataPart<T>, 7);
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,6 +236,8 @@ impl<'a, T> Response<'a, T> {
         )
     }
 }
+impl_message_data_full!(impl<T> Response<'_, T>, 7);
+pub type AnyResponse<'a> = Response<'a, serde_json::Value>;
 
 pub mod request_batch {
     use super::*;
@@ -160,6 +261,7 @@ pub struct RequestBatch<'a, T> {
     pub execution_type: Option<i32>,
     pub requests: T,
 }
+impl_message_data_full!(impl<T> RequestBatch<'_, T>, 8);
 pub type RequestBatchVec<'a, T> = RequestBatch<'a, Vec<request_batch::RequestsItem<'a, T>>>;
 
 pub mod response_batch {
@@ -169,6 +271,7 @@ pub mod response_batch {
     pub struct InfoPart<'a> {
         pub request_id: &'a str,
     }
+    impl_message_data_info!(InfoPart<'_>, 9);
     #[derive(Debug, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct ResultsItem<'a, T> {
@@ -185,6 +288,7 @@ pub mod response_batch {
     pub struct ResultsPart<T> {
         pub results: T,
     }
+    impl_message_data!(impl<T> ResultsPart<T>, 9);
     pub type ResultsPartVec<'a, T> = ResultsPart<Vec<ResultsItem<'a, T>>>;
 }
 #[derive(Debug, Deserialize, Serialize)]
@@ -193,8 +297,6 @@ pub struct ResponseBatch<'a, T> {
     pub request_id: &'a str,
     pub results: T,
 }
-pub type RequestBatchResponseVec<'a, T> =
-    ResponseBatch<'a, Vec<response_batch::ResultsItem<'a, T>>>;
 impl<'a, T> ResponseBatch<'a, T> {
     pub fn from_parts(
         info: response_batch::InfoPart<'a>,
@@ -206,6 +308,9 @@ impl<'a, T> ResponseBatch<'a, T> {
         }
     }
 }
+impl_message_data_full!(impl<T> ResponseBatch<'_, T>, 9);
+pub type ResponseBatchVec<'a, T> = ResponseBatch<'a, Vec<response_batch::ResultsItem<'a, T>>>;
+pub type AnyResponseBatch<'a> = ResponseBatchVec<'a, serde_json::Value>;
 
 pub mod raw {
     use super::*;
@@ -226,14 +331,28 @@ pub struct Raw<T> {
     pub op: i32,
     pub d: T,
 }
+impl<T: Serialize> Raw<T> {
+    pub fn to_ws_message_json(&self) -> Result<WsMessage, serde_json::Error> {
+        Ok(WsMessage::text(serde_json::to_string(self)?))
+    }
+}
+impl<'de, T: Deserialize<'de>> Raw<T> {
+    pub fn from_ws_message_json(ws_message: &'de WsMessage) -> Result<Self, DecodeError> {
+        let text = match ws_message {
+            WsMessage::Text(text) => text,
+            _ => return Err(DecodeError::NotText),
+        };
+        Ok(serde_json::from_str(text)?)
+    }
+}
 
 #[derive(Debug)]
 pub enum ServerMessage<'a> {
     Hello(Hello<'a>),
     Identified(Identified),
     Event(event::InfoPart<'a>),
-    RequestResponse(response::InfoPart<'a>),
-    RequestBatchResponse(response_batch::InfoPart<'a>),
+    Response(response::InfoPart<'a>),
+    ResponseBatch(response_batch::InfoPart<'a>),
 }
 impl<'a> ServerMessage<'a> {
     pub fn from_json_str(json: &'a str) -> Result<ServerMessage<'a>, serde_json::Error> {
@@ -246,25 +365,10 @@ impl<'a> ServerMessage<'a> {
             ServerMessage::Hello(_) => 0,
             ServerMessage::Identified(_) => 2,
             ServerMessage::Event(_) => 5,
-            ServerMessage::RequestResponse(_) => 7,
-            ServerMessage::RequestBatchResponse(_) => 9,
+            ServerMessage::Response(_) => 7,
+            ServerMessage::ResponseBatch(_) => 9,
         }
     }
-}
-
-pub fn serialize_message<T: Serialize, S>(
-    op: i32,
-    data: &T,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let mut ser_map = serializer.serialize_map(Some(2))?;
-    ser_map.serialize_entry("op", &op)?;
-    ser_map.serialize_key("d")?;
-    ser_map.serialize_value(data)?;
-    ser_map.end()
 }
 
 pub fn extract_message_data_auto<'de, D>(
@@ -272,7 +376,7 @@ pub fn extract_message_data_auto<'de, D>(
     op: i32,
 ) -> Result<ServerMessage<'de>, D::Error>
 where
-    D: Deserializer<'de>,
+    D: serde::Deserializer<'de>,
 {
     macro_rules! match_op {
         ($variant:ident,$data_type:path) => {
@@ -282,11 +386,11 @@ where
         };
     }
     match op {
-        0 => Ok(match_op!(Hello, Hello)),
+        Hello::OP => Ok(match_op!(Hello, Hello)),
         2 => Ok(match_op!(Identified, Identified)),
         5 => Ok(match_op!(Event, event::InfoPart)),
-        7 => Ok(match_op!(RequestResponse, response::InfoPart)),
-        9 => Ok(match_op!(RequestBatchResponse, response_batch::InfoPart)),
+        7 => Ok(match_op!(Response, response::InfoPart)),
+        9 => Ok(match_op!(ResponseBatch, response_batch::InfoPart)),
         invalid => Err(de::Error::invalid_value(
             de::Unexpected::Signed(invalid.into()),
             &"valid OBS Server->Client message OpCode",
@@ -297,7 +401,6 @@ where
 struct MessageDataVisitor<Data> {
     _p: PhantomData<Data>,
 }
-
 impl<Data> MessageDataVisitor<Data> {
     fn new() -> Self {
         Self { _p: PhantomData }
@@ -328,38 +431,4 @@ impl<'de, Data: Deserialize<'de>> de::Visitor<'de> for MessageDataVisitor<Data> 
             None => Err(de::Error::missing_field("d")),
         }
     }
-}
-
-pub trait AsRawMessage {
-    type Target: Serialize;
-    fn as_raw_message(&self) -> Raw<&Self::Target>;
-}
-macro_rules! make_as_raw_message_fn {
-    ($op:literal) => {
-        type Target = Self;
-        fn as_raw_message(&self) -> Raw<&Self> {
-            Raw { op: $op, d: self }
-        }
-    };
-}
-impl<T: Serialize> AsRawMessage for Raw<T> {
-    type Target = T;
-    fn as_raw_message(&self) -> Raw<&T> {
-        Raw {
-            op: self.op,
-            d: &self.d,
-        }
-    }
-}
-impl<'a> AsRawMessage for Hello<'a> {
-    make_as_raw_message_fn!(0);
-}
-impl AsRawMessage for Reidentify {
-    make_as_raw_message_fn!(3);
-}
-impl<'a, T: Serialize> AsRawMessage for Request<'a, T> {
-    make_as_raw_message_fn!(6);
-}
-impl<'a, T: Serialize> AsRawMessage for RequestBatch<'a, T> {
-    make_as_raw_message_fn!(8);
 }

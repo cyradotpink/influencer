@@ -14,3 +14,4 @@ sha2 = "0.10.9"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tungstenite.workspace = true
+thiserror = "2.0.12"

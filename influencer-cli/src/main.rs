@@ -1,12 +1,15 @@
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
-use influencer::{ObsSocket, message};
+use influencer::{
+    auth_machine,
+    message::{self, FromWsMessageJson as _, IntoWsMessageJson as _},
+};
 use serde::{Deserialize, Serialize};
 use std::{
-    io::{self, Write, stdout},
+    io::{Write, stdout},
     net::TcpStream,
-    thread::sleep,
-    time::Duration,
+    process::exit,
 };
+use tungstenite::WebSocket;
 
 fn main() {
     fn parse_req_data(s: &str) -> serde_json::Result<serde_json::Value> {
@@ -117,24 +120,19 @@ fn main() {
     match matches.subcommand() {
         Some(("request", sub_matches)) => {
             let request_type = sub_matches.get_one::<String>("req_type").unwrap();
-            let request_data: Option<&serde_json::Value> =
-                sub_matches.get_one::<serde_json::Value>("data");
-            let mut obs = connect(&matches);
-            let sub = obs.subscribe();
-            let request_id = obs.generate_id();
-            obs.write_msg(&message::Request {
+            let request_data = sub_matches.get_one::<serde_json::Value>("data");
+            let request_id = "uwu";
+            let request = message::Request {
                 request_type,
-                request_id: &request_id,
+                request_id,
                 request_data,
-            })
-            .unwrap();
-            obs.flush().unwrap();
-            obs.next_response_for_request_id(sub, &request_id).unwrap();
-            let (info, data) = obs.get_buffered_response::<serde_json::Value>(sub).unwrap();
-            let data = data.unwrap();
-            let response = message::Response::from_info_w_data(info, data);
+            };
+            let mut ws = connect(&matches);
+            ws.send(request.into_ws_message_json().unwrap()).unwrap();
+            let response = ws.read().unwrap();
+            let response = message::AnyResponse::from_ws_message_json(&response).unwrap();
+            assert_eq!(response.request_id, request_id);
             json_print(pretty, &response).unwrap();
-            obs.ack_message(sub);
         }
         Some(("batch", sub_matches)) => {
             let requests_list = sub_matches
@@ -142,45 +140,48 @@ fn main() {
                 .unwrap();
             let execution_type = sub_matches.get_one::<i32>("execution-type").copied();
             let halt_on_failure = sub_matches.get_flag("halt-on-failure");
-            let mut obs = connect(&matches);
-            let sub = obs.subscribe();
-            let request_id = obs.generate_id();
-            obs.write_msg(&message::RequestBatch {
-                request_id: &request_id,
+            let request_id = "uwu";
+            let request = message::RequestBatch {
+                request_id,
                 halt_on_failure: Some(halt_on_failure),
-                execution_type: execution_type,
+                execution_type,
                 requests: requests_list,
-            })
-            .unwrap();
-            obs.flush().unwrap();
-            obs.next_response_for_batch_request_id(sub, &request_id)
-                .unwrap();
-            let info = obs.get_buffered_response_batch_message(sub).unwrap();
-            let data: message::raw::DPart<
-                message::response_batch::ResultsPartVec<serde_json::Value>,
-            > = serde_json::from_str(obs.get_buffered_text_message(sub).unwrap()).unwrap();
-            let response = message::ResponseBatch::from_parts(info, data.d);
+            };
+            let mut ws = connect(&matches);
+            ws.send(request.into_ws_message_json().unwrap()).unwrap();
+            let response = ws.read().unwrap();
+            let response = message::AnyResponseBatch::from_ws_message_json(&response).unwrap();
+            assert_eq!(response.request_id, request_id);
             json_print(pretty, &response).unwrap();
-            obs.ack_message(sub);
         }
         Some(("events", sub_matches)) => {
             let event_subscriptions = sub_matches.get_one::<u32>("event-subs").copied();
-            let mut obs = connect(&matches);
-            let sub = obs.subscribe();
-            obs.write_msg(&message::Reidentify {
+            let reidentify = message::Reidentify {
                 event_subscriptions,
-            })
-            .unwrap();
-            obs.flush().unwrap();
-            while let Ok(_) = obs.next_event_message(sub) {
-                let info = obs.get_buffered_event_message(sub).unwrap();
-                let data = serde_json::from_str::<
-                    message::raw::DPart<message::event::DataPart<serde_json::Value>>,
-                >(obs.get_buffered_text_message(sub).unwrap())
-                .unwrap();
-                let event = message::Event::from_parts(info, data.d);
-                json_print(pretty, &event).unwrap();
-                obs.ack_message(sub);
+            };
+            let mut ws = connect(&matches);
+            ws.send(reidentify.into_ws_message_json().unwrap()).unwrap();
+            message::Identified::from_ws_message_json(&ws.read().unwrap()).unwrap();
+            loop {
+                match ws.read() {
+                    Ok(message) => {
+                        let event = message::AnyEvent::from_ws_message_json(&message);
+                        let event = match event {
+                            Ok(event) => event,
+                            Err(err) => {
+                                println!(
+                                    "Error: {err}\nWhile interpreting this message: {message}"
+                                );
+                                return;
+                            }
+                        };
+                        json_print(pretty, &event).unwrap();
+                    }
+                    Err(err) => {
+                        println!("Error: {err}");
+                        return;
+                    }
+                }
             }
         }
         _ => unreachable!(),
@@ -190,7 +191,7 @@ fn main() {
 fn json_print<T: Serialize>(pretty: bool, data: &T) -> Result<(), serde_json::Error> {
     let mut out = stdout();
     json_serialize(pretty, data, &mut out)?;
-    out.write("\n".as_bytes()).unwrap();
+    writeln!(out).unwrap();
     Ok(())
 }
 
@@ -206,29 +207,32 @@ fn json_serialize<T: Serialize, W: Write>(
     }
 }
 
-fn connect(matches: &ArgMatches) -> ObsSocket<TcpStream> {
+fn connect(matches: &ArgMatches) -> WebSocket<TcpStream> {
     let addr: &String = matches.get_one("ws-addr").unwrap();
     let port: &u16 = matches.get_one("ws-port").unwrap();
     let password = matches.get_one::<String>("ws-password").map(|v| v.as_str());
-    let stream = TcpStream::connect((addr.as_str(), *port)).expect("TCP connection failed");
-    let (ws, _res) = tungstenite::client::client(&format!("ws://{}:{}", addr, port), stream)
+    let stream = TcpStream::connect((addr.as_str(), *port));
+    let stream = match stream {
+        Ok(stream) => stream,
+        Err(err) => {
+            println!("TCP Connection failed: {err}");
+            exit(1);
+        }
+    };
+    let (ws, _res) = tungstenite::client::client(format!("ws://{addr}:{port}"), stream)
         .expect("WebSocket handshake failed");
-    let mut obs = ObsSocket::new(ws);
-    let sub = obs.subscribe();
+    let mut auth = auth_machine::AuthMachine::new(ws, password);
     loop {
-        match obs.step_auth(sub, password) {
-            Ok(influencer::Readyness::Ready) => {
-                break;
+        use auth_machine::MachineResult::*;
+        match auth.step() {
+            NotReady(machine, Some(machine_error)) => {
+                println!("Error during auth: {machine_error}\nMachine state was:\n{machine:#?}");
+                exit(1);
             }
-            Ok(_) => {}
-            Err(tungstenite::Error::Io(err)) => match err.kind() {
-                io::ErrorKind::WouldBlock => panic!("Stream is in nonblocking mode"),
-                _ => panic!("IO error: {}", err),
-            },
-            Err(err) => {
-                panic!("WebSocket error: {}", err)
+            NotReady(machine, None) => {
+                auth = machine;
             }
+            Ready(ws, _) => break ws,
         }
     }
-    obs
 }
