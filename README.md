@@ -2,7 +2,7 @@
 
 OBS WebSocket CLI and Rust library.
 
-## Motivation
+### Motivation
 
 OBS hotkeys don't work globally on Wayland (yet). With this tool, you can register command-executing system shortcuts as a workaround.
 
