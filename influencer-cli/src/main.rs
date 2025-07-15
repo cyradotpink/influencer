@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::{Write, stdout},
     net::TcpStream,
-    process::exit,
 };
 use tungstenite::WebSocket;
 
@@ -124,7 +123,7 @@ fn main() -> Result<(), anyhow::Error> {
                 request_id,
                 request_data: sub_matches.get_one::<serde_json::Value>("data"),
             };
-            let mut ws = connect(&matches, Some(0));
+            let mut ws = connect(&matches, Some(0))?;
             ws.send(request.into_ws_message_json()?)?;
             let response = ws.read()?;
             let response = response.obs_message_data::<m::AnyResponse>()?;
@@ -144,7 +143,7 @@ fn main() -> Result<(), anyhow::Error> {
                 execution_type,
                 requests: requests_list,
             };
-            let mut ws = connect(&matches, Some(0));
+            let mut ws = connect(&matches, Some(0))?;
             ws.send(request.into_ws_message_json()?)?;
             let response = ws.read()?;
             let response = response.obs_message_data::<m::AnyResponseBatch>()?;
@@ -153,7 +152,7 @@ fn main() -> Result<(), anyhow::Error> {
         }
         Some(("events", sub_matches)) => {
             let event_subscriptions = sub_matches.get_one::<u32>("event-subs").copied();
-            let mut ws = connect(&matches, event_subscriptions);
+            let mut ws = connect(&matches, event_subscriptions)?;
             loop {
                 let event = ws.read()?;
                 let event = event.obs_message_data::<m::AnyEvent>()?;
@@ -184,34 +183,18 @@ fn json_serialize<T: Serialize, W: Write>(
     }
 }
 
-fn connect(matches: &ArgMatches, event_subscriptions: Option<u32>) -> WebSocket<TcpStream> {
+fn connect(
+    matches: &ArgMatches,
+    event_subscriptions: Option<u32>,
+) -> anyhow::Result<WebSocket<TcpStream>> {
     let host: &String = matches.get_one("host").unwrap();
     let port: &u16 = matches.get_one("port").unwrap();
     let password = matches.get_one::<String>("password").map(|v| v.as_str());
-    let stream = TcpStream::connect((host.as_str(), *port));
-    let stream = match stream {
-        Ok(stream) => stream,
-        Err(err) => {
-            println!("TCP Connection failed: {err}");
-            exit(1);
-        }
-    };
-    let (ws, _res) = tungstenite::client::client(format!("ws://{host}:{port}"), stream)
-        .expect("WebSocket handshake failed");
-    let mut auth = auth_machine::AuthMachine::new(ws, password, event_subscriptions);
-    loop {
-        use auth_machine::MachineResult::*;
-        match auth.step() {
-            NotReady(machine, Some(machine_error)) => {
-                println!("Error during auth: {machine_error}\nMachine state was:\n{machine:#?}");
-                exit(1);
-            }
-            NotReady(machine, None) => {
-                auth = machine;
-            }
-            Ready(ws, _) => break ws,
-        }
-    }
+    let stream = TcpStream::connect((host.as_str(), *port))?;
+    let (ws, _res) = tungstenite::client::client(format!("ws://{host}:{port}"), stream)?;
+    let auth = auth_machine::AuthMachine::new(ws, password, event_subscriptions);
+    let (ws, _) = auth.step_until_error().map_err(|(_, err)| err)?;
+    Ok(ws)
 }
 
 mod style {

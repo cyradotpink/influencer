@@ -13,11 +13,11 @@ impl KBoolExt for bool {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
-    #[error("unexpected opcode ({0})")]
+    #[error("Unexpected opcode ({0})")]
     OpCodeMismatch(i32),
-    #[error("not a text message")]
+    #[error("Not a text message")]
     NotText,
-    #[error("json deserialize failed ({0})")]
+    #[error("JSON deserialize failed ({0})")]
     Json(#[from] serde_json::Error),
 }
 

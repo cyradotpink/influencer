@@ -14,10 +14,10 @@ enum State {
 
 #[derive(Debug, Error)]
 pub enum MachineError {
-    #[error("underlying WebSocket error ({0})")]
+    #[error("Underlying WebSocket error ({0})")]
     // boxed bc clippy complained
     WebSocket(Box<tungstenite::Error>),
-    #[error("unexpected message ({0})")]
+    #[error("Unexpected message ({0})")]
     Decode(#[from] m::DecodeError),
 }
 impl From<tungstenite::Error> for MachineError {
@@ -116,6 +116,18 @@ impl<'a, Stream: Read + Write> AuthMachine<'a, Stream> {
             MachineResult::Ready(self.ws, rpc_version)
         } else {
             MachineResult::NotReady(self, res.err())
+        }
+    }
+    pub fn step_until_error(self) -> Result<(WebSocket<Stream>, u32), (Self, MachineError)> {
+        let mut result = self.step();
+        loop {
+            match result {
+                MachineResult::NotReady(machine, None) => {
+                    result = machine.step();
+                }
+                MachineResult::NotReady(machine, Some(err)) => break Err((machine, err)),
+                MachineResult::Ready(ws, v) => break Ok((ws, v)),
+            }
         }
     }
 }

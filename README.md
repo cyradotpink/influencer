@@ -13,12 +13,12 @@ Run `influencer help`. The CLI describes itself relatively well. Currently, you 
 ### Examples
 ```sh
 # Saving OBS's active replay buffer
-influencer --ws-password p4ssw0rd request SaveReplayBuffer
+influencer --password p4ssw0rd request SaveReplayBuffer
 ```
 
 ```sh
 # Configuring the connection using environment variables
-export OBS_WS_ADDRESS="127.0.0.1"
+export OBS_WS_HOST="127.0.0.1"
 export OBS_WS_PORT="6969"
 export OBS_WS_PASSWORD="p4ssw0rd"
 # Setting a named input's volume to -10dB
