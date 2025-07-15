@@ -8,7 +8,7 @@ OBS hotkeys don't work globally on Wayland (yet). With this tool, you can regist
 
 ## CLI Usage
 
-Run `influencer help`. The CLI describes itself relatively well. Currently, you can send a request (and receive the response) or receive events. An interactive mode may be added in the future. See [OBS's documentation](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md) for a lists of request/event types.
+Run `influencer help`. The CLI, thanks to clap, describes itself pretty well. Currently, you can send a request (and receive the response) or receive events. An interactive mode may be added in the future. The distinguishing quirk of this particular OBS CLI is that it is oblivious to the details of individual request/event types (See [OBS's documentation](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md) for a list). It will accept _any_ request types and data you give it. In that sense, it's kind of a lower level interface, which you may or may not find useful.
 
 ### Examples
 ```sh
@@ -35,4 +35,4 @@ influencer --compact events
 
 ## Library Usage
 
-No documentation right now because the API isn't fully baked yet.
+No documentation right now because I still want to change a few things.
