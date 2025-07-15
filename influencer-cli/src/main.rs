@@ -1,7 +1,7 @@
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use influencer::{
     auth_machine,
-    message::{self, FromWsMessageJson as _, IntoWsMessageJson as _},
+    message::{self as m, IntoWsMessageJson as _, WsMessageExt as _},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -11,7 +11,7 @@ use std::{
 };
 use tungstenite::WebSocket;
 
-fn main() {
+fn main() -> Result<(), anyhow::Error> {
     fn parse_req_data(s: &str) -> serde_json::Result<serde_json::Value> {
         serde_json::from_str(s)
     }
@@ -28,33 +28,34 @@ fn main() {
         serde_json::from_str(s)
     }
     let command = clap::command!()
+        .styles(style::CLAP_STYLING)
         .arg(
-            Arg::new("ws-addr")
-                .value_name("ADDRESS")
-                .long("ws-addr")
-                .short('a')
-                .env("OBS_WS_ADDRESS")
+            Arg::new("host")
+                .value_name("HOST")
+                .long("host")
+                .short('H')
+                .env("OBS_WS_HOST")
                 .default_value("localhost")
-                .help("OBS websocket address."),
+                .help("OBS websocket host"),
         )
         .arg(
-            Arg::new("ws-port")
+            Arg::new("port")
                 .value_name("PORT")
-                .long("ws-port")
+                .long("port")
                 .short('p')
                 .env("OBS_WS_PORT")
                 .default_value("4455")
                 .value_parser(value_parser!(u16))
-                .help("OBS websocket port."),
+                .help("OBS websocket port"),
         )
         .arg(
-            Arg::new("ws-password")
+            Arg::new("password")
                 .value_name("PASSWORD")
-                .long("ws-password")
+                .long("password")
                 .short('s')
                 .env("OBS_WS_PASSWORD")
                 .hide_env_values(true)
-                .help("OBS websocket password."),
+                .help("OBS websocket password"),
         )
         .arg(
             Arg::new("compact")
@@ -110,29 +111,25 @@ fn main() {
                 Arg::new("event-subs")
                     .value_name("BITMASK")
                     .help("Event types bitmask")
-                    .default_value("1023")
                     .value_parser(value_parser!(u32)),
             ),
         );
-    // todo different subcommands, like for listening to events
     let matches = command.get_matches();
     let pretty = !matches.get_flag("compact");
     match matches.subcommand() {
         Some(("request", sub_matches)) => {
-            let request_type = sub_matches.get_one::<String>("req_type").unwrap();
-            let request_data = sub_matches.get_one::<serde_json::Value>("data");
-            let request_id = "uwu";
-            let request = message::Request {
-                request_type,
+            let request_id = ":3";
+            let request = m::Request {
+                request_type: sub_matches.get_one::<String>("req_type").unwrap(),
                 request_id,
-                request_data,
+                request_data: sub_matches.get_one::<serde_json::Value>("data"),
             };
-            let mut ws = connect(&matches);
-            ws.send(request.into_ws_message_json().unwrap()).unwrap();
-            let response = ws.read().unwrap();
-            let response = message::AnyResponse::from_ws_message_json(&response).unwrap();
+            let mut ws = connect(&matches, Some(0));
+            ws.send(request.into_ws_message_json()?)?;
+            let response = ws.read()?;
+            let response = response.obs_message_data::<m::AnyResponse>()?;
             assert_eq!(response.request_id, request_id);
-            json_print(pretty, &response).unwrap();
+            json_print(pretty, &response)?;
         }
         Some(("batch", sub_matches)) => {
             let requests_list = sub_matches
@@ -140,52 +137,32 @@ fn main() {
                 .unwrap();
             let execution_type = sub_matches.get_one::<i32>("execution-type").copied();
             let halt_on_failure = sub_matches.get_flag("halt-on-failure");
-            let request_id = "uwu";
-            let request = message::RequestBatch {
+            let request_id = ":3";
+            let request = m::RequestBatch {
                 request_id,
                 halt_on_failure: Some(halt_on_failure),
                 execution_type,
                 requests: requests_list,
             };
-            let mut ws = connect(&matches);
-            ws.send(request.into_ws_message_json().unwrap()).unwrap();
-            let response = ws.read().unwrap();
-            let response = message::AnyResponseBatch::from_ws_message_json(&response).unwrap();
+            let mut ws = connect(&matches, Some(0));
+            ws.send(request.into_ws_message_json()?)?;
+            let response = ws.read()?;
+            let response = response.obs_message_data::<m::AnyResponseBatch>()?;
             assert_eq!(response.request_id, request_id);
-            json_print(pretty, &response).unwrap();
+            json_print(pretty, &response)?;
         }
         Some(("events", sub_matches)) => {
             let event_subscriptions = sub_matches.get_one::<u32>("event-subs").copied();
-            let reidentify = message::Reidentify {
-                event_subscriptions,
-            };
-            let mut ws = connect(&matches);
-            ws.send(reidentify.into_ws_message_json().unwrap()).unwrap();
-            message::Identified::from_ws_message_json(&ws.read().unwrap()).unwrap();
+            let mut ws = connect(&matches, event_subscriptions);
             loop {
-                match ws.read() {
-                    Ok(message) => {
-                        let event = message::AnyEvent::from_ws_message_json(&message);
-                        let event = match event {
-                            Ok(event) => event,
-                            Err(err) => {
-                                println!(
-                                    "Error: {err}\nWhile interpreting this message: {message}"
-                                );
-                                return;
-                            }
-                        };
-                        json_print(pretty, &event).unwrap();
-                    }
-                    Err(err) => {
-                        println!("Error: {err}");
-                        return;
-                    }
-                }
+                let event = ws.read()?;
+                let event = event.obs_message_data::<m::AnyEvent>()?;
+                json_print(pretty, &event)?;
             }
         }
         _ => unreachable!(),
     }
+    Ok(())
 }
 
 fn json_print<T: Serialize>(pretty: bool, data: &T) -> Result<(), serde_json::Error> {
@@ -207,11 +184,11 @@ fn json_serialize<T: Serialize, W: Write>(
     }
 }
 
-fn connect(matches: &ArgMatches) -> WebSocket<TcpStream> {
-    let addr: &String = matches.get_one("ws-addr").unwrap();
-    let port: &u16 = matches.get_one("ws-port").unwrap();
-    let password = matches.get_one::<String>("ws-password").map(|v| v.as_str());
-    let stream = TcpStream::connect((addr.as_str(), *port));
+fn connect(matches: &ArgMatches, event_subscriptions: Option<u32>) -> WebSocket<TcpStream> {
+    let host: &String = matches.get_one("host").unwrap();
+    let port: &u16 = matches.get_one("port").unwrap();
+    let password = matches.get_one::<String>("password").map(|v| v.as_str());
+    let stream = TcpStream::connect((host.as_str(), *port));
     let stream = match stream {
         Ok(stream) => stream,
         Err(err) => {
@@ -219,9 +196,9 @@ fn connect(matches: &ArgMatches) -> WebSocket<TcpStream> {
             exit(1);
         }
     };
-    let (ws, _res) = tungstenite::client::client(format!("ws://{addr}:{port}"), stream)
+    let (ws, _res) = tungstenite::client::client(format!("ws://{host}:{port}"), stream)
         .expect("WebSocket handshake failed");
-    let mut auth = auth_machine::AuthMachine::new(ws, password);
+    let mut auth = auth_machine::AuthMachine::new(ws, password, event_subscriptions);
     loop {
         use auth_machine::MachineResult::*;
         match auth.step() {
@@ -235,4 +212,27 @@ fn connect(matches: &ArgMatches) -> WebSocket<TcpStream> {
             Ready(ws, _) => break ws,
         }
     }
+}
+
+mod style {
+    // taken from https://github.com/crate-ci/clap-cargo/blob/master/src/style.rs
+    use clap::builder::styling::{AnsiColor, Effects, Style};
+
+    const HEADER: Style = AnsiColor::Green.on_default().effects(Effects::BOLD);
+    const USAGE: Style = AnsiColor::Green.on_default().effects(Effects::BOLD);
+    const LITERAL: Style = AnsiColor::Cyan.on_default().effects(Effects::BOLD);
+    const PLACEHOLDER: Style = AnsiColor::Cyan.on_default();
+    const ERROR: Style = AnsiColor::Red.on_default().effects(Effects::BOLD);
+    const VALID: Style = AnsiColor::Cyan.on_default().effects(Effects::BOLD);
+    const INVALID: Style = AnsiColor::Yellow.on_default().effects(Effects::BOLD);
+
+    pub const CLAP_STYLING: clap::builder::styling::Styles =
+        clap::builder::styling::Styles::styled()
+            .header(HEADER)
+            .usage(USAGE)
+            .literal(LITERAL)
+            .placeholder(PLACEHOLDER)
+            .error(ERROR)
+            .valid(VALID)
+            .invalid(INVALID);
 }

@@ -1,4 +1,4 @@
-use crate::message::{self, MessageDataFull as _, MessageDataInfo as _};
+use crate::message::{self as m, IntoWsMessageJson as _, WsMessageExt as _};
 
 use std::io::{Read, Write};
 use thiserror::Error;
@@ -18,7 +18,7 @@ pub enum MachineError {
     // boxed bc clippy complained
     WebSocket(Box<tungstenite::Error>),
     #[error("unexpected message ({0})")]
-    Decode(#[from] message::DecodeError),
+    Decode(#[from] m::DecodeError),
 }
 impl From<tungstenite::Error> for MachineError {
     fn from(value: tungstenite::Error) -> Self {
@@ -35,14 +35,20 @@ pub enum MachineResult<'a, Stream> {
 #[derive(Debug)]
 pub struct AuthMachine<'a, Stream> {
     password: Option<&'a str>,
+    event_subscriptions: Option<u32>,
     needs_flush: bool,
     state: State,
     ws: WebSocket<Stream>,
 }
 impl<'a, Stream: Read + Write> AuthMachine<'a, Stream> {
-    pub fn new(ws: WebSocket<Stream>, password: Option<&str>) -> AuthMachine<'_, Stream> {
+    pub fn new(
+        ws: WebSocket<Stream>,
+        password: Option<&str>,
+        event_subscriptions: Option<u32>,
+    ) -> AuthMachine<'_, Stream> {
         AuthMachine {
             password,
+            event_subscriptions,
             needs_flush: false,
             state: State::Connected,
             ws,
@@ -59,10 +65,9 @@ impl<'a, Stream: Read + Write> AuthMachine<'a, Stream> {
         }
         match self.state {
             State::Connected => {
-                let msg = self.ws.read()?;
-                let msg = message::Raw::from_ws_message_json(&msg)?;
-                let msg = message::Hello::from_raw_message(msg)?;
-                let auth = msg
+                let hello = self.ws.read()?;
+                let hello = hello.obs_message_data::<m::Hello>()?;
+                let auth = hello
                     .authentication
                     .map(|v| (v.challenge.to_owned(), v.salt.to_owned()));
                 self.state = State::GotHello(auth);
@@ -84,24 +89,22 @@ impl<'a, Stream: Read + Write> AuthMachine<'a, Stream> {
                     let auth_string = base64ct::Base64::encode_string(&auth_string);
                     authentication = Some(auth_string);
                 }
-                let data = message::Identify {
+                let data = m::Identify {
                     rpc_version: 1,
                     authentication: authentication.as_deref(),
-                    event_subscriptions: Some(0),
+                    event_subscriptions: self.event_subscriptions,
                 };
                 let msg = data
-                    .into_raw_message()
-                    .to_ws_message_json()
-                    .map_err(Into::<message::DecodeError>::into)?;
+                    .into_ws_message_json()
+                    .map_err(Into::<m::DecodeError>::into)?;
                 self.ws.write(msg)?;
                 self.state = State::SentIdentify;
                 self.needs_flush = true;
             }
             State::SentIdentify => {
-                let msg = self.ws.read()?;
-                let msg = message::Raw::from_ws_message_json(&msg)?;
-                let msg = message::Identified::from_raw_message(msg)?;
-                self.state = State::Ready(msg.negotiated_rpc_version);
+                let identified = self.ws.read()?;
+                let identified = identified.obs_message_data::<m::Identified>()?;
+                self.state = State::Ready(identified.negotiated_rpc_version);
             }
             State::Ready(_) => unreachable!(),
         }

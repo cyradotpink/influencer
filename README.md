@@ -2,11 +2,13 @@
 
 OBS WebSocket CLI and Rust library.
 
-I made this because OBS hotkeys don't work globally on Wayland (yet). With this tool, I can register command-executing system shortcuts as a workaround.
+## Motivation
+
+OBS hotkeys don't work globally on Wayland (yet). With this tool, you can register command-executing system shortcuts as a workaround.
 
 ## CLI Usage
 
-Run `influencer help`. The CLI describes itself relatively well. Currently, you can send a request (and receive the response) or receive events. See [OBS's documentation](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md) for a lists of request/event types.
+Run `influencer help`. The CLI describes itself relatively well. Currently, you can send a request (and receive the response) or receive events. An interactive mode may be added in the future. See [OBS's documentation](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md) for a lists of request/event types.
 
 ### Examples
 ```sh

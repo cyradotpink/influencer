@@ -14,7 +14,8 @@ path = "src/main.rs"
 
 [dependencies]
 influencer = { path = "../influencer" }
-clap = { version = "4.5.40", features = ["cargo", "env"] }
+clap = { version = "4.5.40", features = ["cargo", "env", "color"] }
+anyhow = "1.0.98"
 serde.workspace = true
 serde_json.workspace = true
 tungstenite.workspace = true

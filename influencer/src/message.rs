@@ -40,6 +40,21 @@ impl<'de, T: Deserialize<'de> + MessageDataInfo> FromWsMessageJson<'de> for T {
         Self::from_raw_message(raw)
     }
 }
+pub trait WsMessageExt {
+    fn obs_message_data<'a, T: FromWsMessageJson<'a>>(&'a self) -> Result<T, DecodeError>;
+    fn any_obs_server_message<'a>(&'a self) -> Result<ServerMessage<'a>, DecodeError>;
+}
+impl WsMessageExt for WsMessage {
+    fn obs_message_data<'a, T: FromWsMessageJson<'a>>(&'a self) -> Result<T, DecodeError> {
+        T::from_ws_message_json(self)
+    }
+    fn any_obs_server_message<'a>(&'a self) -> Result<ServerMessage<'a>, DecodeError> {
+        match self {
+            WsMessage::Text(text) => Ok(ServerMessage::from_json_str(text.as_str())?),
+            _ => Err(DecodeError::NotText),
+        }
+    }
+}
 pub trait MessageDataFull: MessageData {
     fn into_raw_message(self) -> Raw<Self> {
         Raw {
@@ -362,11 +377,11 @@ impl<'a> ServerMessage<'a> {
     }
     pub fn opcode(&self) -> i32 {
         match self {
-            ServerMessage::Hello(_) => 0,
-            ServerMessage::Identified(_) => 2,
-            ServerMessage::Event(_) => 5,
-            ServerMessage::Response(_) => 7,
-            ServerMessage::ResponseBatch(_) => 9,
+            ServerMessage::Hello(_) => Hello::OP,
+            ServerMessage::Identified(_) => Identified::OP,
+            ServerMessage::Event(_) => event::InfoPart::OP,
+            ServerMessage::Response(_) => response::InfoPart::OP,
+            ServerMessage::ResponseBatch(_) => response_batch::InfoPart::OP,
         }
     }
 }
@@ -387,10 +402,10 @@ where
     }
     match op {
         Hello::OP => Ok(match_op!(Hello, Hello)),
-        2 => Ok(match_op!(Identified, Identified)),
-        5 => Ok(match_op!(Event, event::InfoPart)),
-        7 => Ok(match_op!(Response, response::InfoPart)),
-        9 => Ok(match_op!(ResponseBatch, response_batch::InfoPart)),
+        Identified::OP => Ok(match_op!(Identified, Identified)),
+        event::InfoPart::OP => Ok(match_op!(Event, event::InfoPart)),
+        response::InfoPart::OP => Ok(match_op!(Response, response::InfoPart)),
+        response_batch::InfoPart::OP => Ok(match_op!(ResponseBatch, response_batch::InfoPart)),
         invalid => Err(de::Error::invalid_value(
             de::Unexpected::Signed(invalid.into()),
             &"valid OBS Server->Client message OpCode",
