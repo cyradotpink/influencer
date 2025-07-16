@@ -2,7 +2,7 @@ use crate::message::{self as m, IntoWsMessageJson as _, WsMessageExt as _};
 
 use std::io::{Read, Write};
 use thiserror::Error;
-use tungstenite::WebSocket;
+use tungstenite::{Error as WsError, Message as WsMessage, WebSocket};
 
 #[derive(Debug)]
 enum State {
@@ -15,7 +15,7 @@ enum State {
 #[derive(Debug, Error)]
 pub enum MachineError {
     #[error("Underlying WebSocket error ({0})")]
-    // boxed bc clippy complained
+    // clippy is unhappy about how large tungestenite's errors are
     WebSocket(Box<tungstenite::Error>),
     #[error("Unexpected message ({0})")]
     Decode(#[from] m::DecodeError),
@@ -25,11 +25,40 @@ impl From<tungstenite::Error> for MachineError {
         MachineError::WebSocket(Box::new(value))
     }
 }
+impl MachineError {
+    pub fn would_block(&self) -> bool {
+        match self {
+            MachineError::WebSocket(error) => match error.as_ref() {
+                WsError::Io(error) => matches!(error.kind(), std::io::ErrorKind::WouldBlock),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum MachineResult<'a, Stream> {
     NotReady(AuthMachine<'a, Stream>, Option<MachineError>),
-    Ready(WebSocket<Stream>, u32),
+    Ready(Stream, u32),
+}
+
+#[allow(clippy::result_large_err)]
+pub trait MessageStream {
+    fn read(&mut self) -> Result<WsMessage, WsError>;
+    fn write(&mut self, message: WsMessage) -> Result<(), WsError>;
+    fn flush(&mut self) -> Result<(), WsError>;
+}
+impl<Stream: Read + Write> MessageStream for WebSocket<Stream> {
+    fn read(&mut self) -> Result<WsMessage, WsError> {
+        self.read()
+    }
+    fn write(&mut self, message: WsMessage) -> Result<(), WsError> {
+        self.write(message)
+    }
+    fn flush(&mut self) -> Result<(), WsError> {
+        self.flush()
+    }
 }
 
 #[derive(Debug)]
@@ -38,11 +67,12 @@ pub struct AuthMachine<'a, Stream> {
     event_subscriptions: Option<u32>,
     needs_flush: bool,
     state: State,
-    ws: WebSocket<Stream>,
+    stream: Stream,
 }
-impl<'a, Stream: Read + Write> AuthMachine<'a, Stream> {
+#[allow(clippy::result_large_err)]
+impl<'a, Stream: MessageStream> AuthMachine<'a, Stream> {
     pub fn new(
-        ws: WebSocket<Stream>,
+        stream: Stream,
         password: Option<&str>,
         event_subscriptions: Option<u32>,
     ) -> AuthMachine<'_, Stream> {
@@ -51,21 +81,24 @@ impl<'a, Stream: Read + Write> AuthMachine<'a, Stream> {
             event_subscriptions,
             needs_flush: false,
             state: State::Connected,
-            ws,
+            stream,
         }
     }
-    pub fn abort(self) -> WebSocket<Stream> {
-        self.ws
+    pub fn get_mut(&mut self) -> &mut Stream {
+        &mut self.stream
+    }
+    pub fn abort(self) -> Stream {
+        self.stream
     }
     fn step_internal(&mut self) -> Result<(), MachineError> {
         if self.needs_flush {
-            self.ws.flush()?;
+            self.stream.flush()?;
             self.needs_flush = false;
             return Ok(());
         }
         match self.state {
             State::Connected => {
-                let hello = self.ws.read()?;
+                let hello = self.stream.read()?;
                 let hello = hello.obs_message_data::<m::Hello>()?;
                 let auth = hello
                     .authentication
@@ -97,12 +130,12 @@ impl<'a, Stream: Read + Write> AuthMachine<'a, Stream> {
                 let msg = data
                     .into_ws_message_json()
                     .map_err(Into::<m::DecodeError>::into)?;
-                self.ws.write(msg)?;
+                self.stream.write(msg)?;
                 self.state = State::SentIdentify;
                 self.needs_flush = true;
             }
             State::SentIdentify => {
-                let identified = self.ws.read()?;
+                let identified = self.stream.read()?;
                 let identified = identified.obs_message_data::<m::Identified>()?;
                 self.state = State::Ready(identified.negotiated_rpc_version);
             }
@@ -110,23 +143,23 @@ impl<'a, Stream: Read + Write> AuthMachine<'a, Stream> {
         }
         Ok(())
     }
-    pub fn step(mut self) -> MachineResult<'a, Stream> {
+    pub fn step_once(mut self) -> MachineResult<'a, Stream> {
         let res = self.step_internal();
         if let State::Ready(rpc_version) = self.state {
-            MachineResult::Ready(self.ws, rpc_version)
+            MachineResult::Ready(self.stream, rpc_version)
         } else {
             MachineResult::NotReady(self, res.err())
         }
     }
-    pub fn step_until_error(self) -> Result<(WebSocket<Stream>, u32), (Self, MachineError)> {
-        let mut result = self.step();
+    pub fn drive(self) -> Result<(Stream, u32), (Self, MachineError)> {
+        let mut result = self.step_once();
         loop {
             match result {
                 MachineResult::NotReady(machine, None) => {
-                    result = machine.step();
+                    result = machine.step_once();
                 }
                 MachineResult::NotReady(machine, Some(err)) => break Err((machine, err)),
-                MachineResult::Ready(ws, v) => break Ok((ws, v)),
+                MachineResult::Ready(stream, v) => break Ok((stream, v)),
             }
         }
     }
