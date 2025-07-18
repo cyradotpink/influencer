@@ -193,7 +193,7 @@ fn connect(
     let stream = TcpStream::connect((host.as_str(), *port))?;
     let (ws, _res) = tungstenite::client::client(format!("ws://{host}:{port}"), stream)?;
     let auth = auth_machine::AuthMachine::new(ws, password, event_subscriptions);
-    let (ws, _) = auth.drive().map_err(|(_, err)| err)?;
+    let (ws, _) = auth.drive().ready()?;
     Ok(ws)
 }
 

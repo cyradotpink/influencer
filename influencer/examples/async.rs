@@ -1,16 +1,17 @@
 #[cfg(not(feature = "example_async"))]
 compile_error!("This example must be compiled with `--features example_async`");
 
+// Demonstrates usage of the library in non-blocking contexts
+
 #[cfg(feature = "example_async")]
 mod example {
     use async_tungstenite::{WebSocketStream, tokio::TokioAdapter};
-    use futures::StreamExt;
+    use futures::StreamExt as _;
     use influencer::{
         auth_machine::AuthMachine,
-        message::{self, AnyResponse, IntoWsMessageJson, ServerMessage, WsMessageExt},
+        message::{self, AnyResponse, IntoWsMessageJson as _, ServerMessage, WsMessageExt as _},
     };
-    use tokio::net::TcpStream;
-    use tokio::runtime;
+    use tokio::{net::TcpStream, runtime};
     use tungstenite::{Message, WebSocket, protocol::Role};
 
     #[derive(Debug)]
@@ -150,28 +151,27 @@ mod example {
         let mut tcp_stream = TcpStream::connect("localhost:4455").await.unwrap();
         // Asynchronously perform the WebSocket handshake on the (borrowed!) TcpStream,
         // but throw away the resulting WebSocketStream.
-        // Alternatively, we could drive the handshake ourselves using tungstenite::handshake::client
+        // Alternatively, we could drive the handshake ourselves using the
+        // tungstenite::handshake::client module
         async_tungstenite::client_async("ws://localhost:4455", TokioAdapter::new(&mut tcp_stream))
             .await
             .unwrap();
         // Temporarily use a "regular" WebSocket client to drive OBS authentication
-        let mut auth = AuthMachine::new(
+        let mut auth = AuthMachine::new_non_blocking(
             WebSocket::from_raw_socket(TokioTcpAdapter::new(&mut tcp_stream), Role::Client, None),
             password,
             None,
         );
         let rpc_version = loop {
             let res = auth.drive();
+            use influencer::auth_machine::DriveResult;
             match res {
-                Ok((_, rpc_version)) => break rpc_version,
-                Err((cont, err)) => {
-                    if err.would_block() {
-                        auth = cont;
-                        auth.get_mut().get_mut().wait().await.unwrap();
-                    } else {
-                        panic!("auth fail: {err}");
-                    }
+                DriveResult::FatalError { error, .. } => panic!("{error}"),
+                DriveResult::Interrupted { cont, .. } => {
+                    auth = cont;
+                    auth.get_stream_mut().get_mut().wait().await.unwrap();
                 }
+                DriveResult::Ready { rpc_version, .. } => break rpc_version,
             }
         };
         // Finally, with handshake and authentication completed,

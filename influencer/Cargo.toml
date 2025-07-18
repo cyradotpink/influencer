@@ -16,6 +16,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tungstenite.workspace = true
 
+# Dependencies needed for the "async" example
 futures = { version = "0.3.31", optional = true }
 
 [dependencies.tokio]
@@ -29,4 +30,6 @@ optional = true
 features = ["tokio-runtime"]
 
 [features]
+# Enables the dependencies required to compile the "async" example.
+# _Do not enable_ when consuming influencer as a dependency.
 example_async = ["dep:async-tungstenite", "dep:tokio", "dep:futures"]

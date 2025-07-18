@@ -1,6 +1,6 @@
 use crate::message::{self as m, IntoWsMessageJson as _, WsMessageExt as _};
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind as IoErrorKind, Read, Write};
 use thiserror::Error;
 use tungstenite::{Error as WsError, Message as WsMessage, WebSocket};
 
@@ -12,37 +12,54 @@ enum State {
     Ready(u32),
 }
 
+/// Errors that might occur while authenticating.
 #[derive(Debug, Error)]
-pub enum MachineError {
+pub enum Error {
+    // Boxed because clippy is unhappy about how large tungstenite's errors are
+    /// An error coming from the underlying WebSocket connection.
+    /// Usually fatal, apart from I/O WouldBlock errors.
     #[error("Underlying WebSocket error ({0})")]
-    // clippy is unhappy about how large tungestenite's errors are
-    WebSocket(Box<tungstenite::Error>),
+    WebSocket(Box<WsError>),
+    /// An error that occured while trying to interpret a message.
+    /// These are always considered fatal because they mean that the server
+    /// or client violated the protocol.
     #[error("Unexpected message ({0})")]
     Decode(#[from] m::DecodeError),
 }
-impl From<tungstenite::Error> for MachineError {
-    fn from(value: tungstenite::Error) -> Self {
-        MachineError::WebSocket(Box::new(value))
+impl From<WsError> for Error {
+    fn from(value: WsError) -> Self {
+        Error::WebSocket(Box::new(value))
     }
 }
-impl MachineError {
-    pub fn would_block(&self) -> bool {
+
+/// The result of attempting to drive an [`AuthMachine`].
+pub enum DriveResult<'a, Stream> {
+    /// The stream is ready to be used to communicate with OBS.
+    Ready { stream: Stream, rpc_version: u32 },
+    /// A non-fatal error occured.
+    Interrupted {
+        cont: AuthMachine<'a, Stream>,
+        error: Error,
+    },
+    /// A fatal error occurred.
+    FatalError { stream: Stream, error: Error },
+}
+impl<'a, Stream> DriveResult<'a, Stream> {
+    /// Convert the result into a [`Result`], discarding some information.
+    pub fn ready(self) -> Result<(Stream, u32), Error> {
         match self {
-            MachineError::WebSocket(error) => match error.as_ref() {
-                WsError::Io(error) => matches!(error.kind(), std::io::ErrorKind::WouldBlock),
-                _ => false,
-            },
-            _ => false,
+            DriveResult::Ready {
+                stream,
+                rpc_version,
+            } => Ok((stream, rpc_version)),
+            DriveResult::Interrupted { error, .. } => Err(error),
+            DriveResult::FatalError { error, .. } => Err(error),
         }
     }
 }
 
-#[derive(Debug)]
-pub enum MachineResult<'a, Stream> {
-    NotReady(AuthMachine<'a, Stream>, Option<MachineError>),
-    Ready(Stream, u32),
-}
-
+/// A `tungstenite::WebSocket` or something that is
+/// readable, writable and flushable exactly like one.
 #[allow(clippy::result_large_err)]
 pub trait MessageStream {
     fn read(&mut self) -> Result<WsMessage, WsError>;
@@ -61,6 +78,7 @@ impl<Stream: Read + Write> MessageStream for WebSocket<Stream> {
     }
 }
 
+/// An OBS authentication state machine.
 #[derive(Debug)]
 pub struct AuthMachine<'a, Stream> {
     password: Option<&'a str>,
@@ -68,13 +86,46 @@ pub struct AuthMachine<'a, Stream> {
     needs_flush: bool,
     state: State,
     stream: Stream,
+    error_is_nonfatal: fn(&Error) -> bool,
 }
-#[allow(clippy::result_large_err)]
 impl<'a, Stream: MessageStream> AuthMachine<'a, Stream> {
+    /// Creates an [`AuthMachine`] that considers all errors
+    /// to be fatal.
     pub fn new(
         stream: Stream,
         password: Option<&str>,
         event_subscriptions: Option<u32>,
+    ) -> AuthMachine<'_, Stream> {
+        fn f(_: &Error) -> bool {
+            false
+        }
+        Self::new_with_custom_fatality(stream, password, event_subscriptions, f)
+    }
+    /// Creates an [`AuthMachine`] that considers (only!)
+    /// I/O WouldBlock errors to be non-fatal.
+    pub fn new_non_blocking(
+        stream: Stream,
+        password: Option<&str>,
+        event_subscriptions: Option<u32>,
+    ) -> AuthMachine<'_, Stream> {
+        fn f(error: &Error) -> bool {
+            match error {
+                Error::WebSocket(error) => match error.as_ref() {
+                    WsError::Io(error) => matches!(error.kind(), IoErrorKind::WouldBlock),
+                    _ => false,
+                },
+                _ => false,
+            }
+        }
+        Self::new_with_custom_fatality(stream, password, event_subscriptions, f)
+    }
+    /// Allows fine-grained control over which errors should be considered non-fatal.
+    /// This is probably not useful.
+    pub fn new_with_custom_fatality(
+        stream: Stream,
+        password: Option<&str>,
+        event_subscriptions: Option<u32>,
+        error_is_nonfatal: fn(&Error) -> bool,
     ) -> AuthMachine<'_, Stream> {
         AuthMachine {
             password,
@@ -82,15 +133,19 @@ impl<'a, Stream: MessageStream> AuthMachine<'a, Stream> {
             needs_flush: false,
             state: State::Connected,
             stream,
+            error_is_nonfatal,
         }
     }
-    pub fn get_mut(&mut self) -> &mut Stream {
+    pub fn get_stream_mut(&mut self) -> &mut Stream {
+        &mut self.stream
+    }
+    pub fn get_stream(&mut self) -> &mut Stream {
         &mut self.stream
     }
     pub fn abort(self) -> Stream {
         self.stream
     }
-    fn step_internal(&mut self) -> Result<(), MachineError> {
+    fn step_internal(&mut self) -> Result<(), Error> {
         if self.needs_flush {
             self.stream.flush()?;
             self.needs_flush = false;
@@ -143,24 +198,31 @@ impl<'a, Stream: MessageStream> AuthMachine<'a, Stream> {
         }
         Ok(())
     }
-    pub fn step_once(mut self) -> MachineResult<'a, Stream> {
-        let res = self.step_internal();
-        if let State::Ready(rpc_version) = self.state {
-            MachineResult::Ready(self.stream, rpc_version)
-        } else {
-            MachineResult::NotReady(self, res.err())
-        }
-    }
-    pub fn drive(self) -> Result<(Stream, u32), (Self, MachineError)> {
-        let mut result = self.step_once();
+    /// Drives the authentication process forward until it is completed or
+    /// an error occurs.
+    pub fn drive(mut self) -> DriveResult<'a, Stream> {
         loop {
-            match result {
-                MachineResult::NotReady(machine, None) => {
-                    result = machine.step_once();
+            break match self.step_internal() {
+                Ok(_) => match self.state {
+                    State::Ready(rpc_version) => DriveResult::Ready {
+                        stream: self.stream,
+                        rpc_version,
+                    },
+                    _ => {
+                        continue;
+                    }
+                },
+                Err(error) => {
+                    if (self.error_is_nonfatal)(&error) {
+                        DriveResult::Interrupted { cont: self, error }
+                    } else {
+                        DriveResult::FatalError {
+                            stream: self.stream,
+                            error,
+                        }
+                    }
                 }
-                MachineResult::NotReady(machine, Some(err)) => break Err((machine, err)),
-                MachineResult::Ready(stream, v) => break Ok((stream, v)),
-            }
+            };
         }
     }
 }
