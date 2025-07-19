@@ -1,6 +1,6 @@
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use influencer::{
-    auth_machine,
+    auth,
     message::{self as m, IntoWsMessageJson as _, WsMessageExt as _},
 };
 use serde::{Deserialize, Serialize};
@@ -192,7 +192,7 @@ fn connect(
     let password = matches.get_one::<String>("password").map(|v| v.as_str());
     let stream = TcpStream::connect((host.as_str(), *port))?;
     let (ws, _res) = tungstenite::client::client(format!("ws://{host}:{port}"), stream)?;
-    let auth = auth_machine::AuthMachine::new(ws, password, event_subscriptions);
+    let auth = auth::AuthMachine::new(ws, password, event_subscriptions);
     let (ws, _) = auth.drive().ready()?;
     Ok(ws)
 }

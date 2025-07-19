@@ -2,13 +2,16 @@
 compile_error!("This example must be compiled with `--features example_async`");
 
 // Demonstrates usage of the library in non-blocking contexts
+// Takes password, port, host as first, second, third command line argument
+// Defaults to no password, 4455, localhost
+// Makes a GetVersion request and waits to receive 10 events
 
 #[cfg(feature = "example_async")]
 mod example {
     use async_tungstenite::{WebSocketStream, tokio::TokioAdapter};
     use futures::StreamExt as _;
     use influencer::{
-        auth_machine::AuthMachine,
+        auth::AuthMachine,
         message::{self, AnyResponse, IntoWsMessageJson as _, ServerMessage, WsMessageExt as _},
     };
     use tokio::{net::TcpStream, runtime};
@@ -75,8 +78,9 @@ mod example {
     }
 
     async fn async_main() {
-        let password = std::env::args().nth(1);
-        let (ws, _rpc_version) = obs_connect(password.as_deref()).await;
+        let mut args = std::env::args().skip(1);
+        let (ws, rpc_version) = obs_connect(args.next(), args.next(), args.next()).await;
+        println!("Connected! Server selected RPC version {}", rpc_version);
         let (ws_sender, mut ws_receiver) = ws.split();
         let (tx, ws_rx1) = tokio::sync::broadcast::channel::<Message>(8);
         let ws_rx2 = tx.subscribe();
@@ -105,8 +109,11 @@ mod example {
                 match message.any_obs_server_message() {
                     Ok(ServerMessage::Event(_)) => {
                         n += 1;
-                        let event = message.obs_message_data::<message::AnyEvent>().unwrap();
-                        println!("{:?}", event);
+                        let event = serde_json::to_string_pretty(
+                            &message.obs_message_data::<message::AnyEvent>().unwrap(),
+                        )
+                        .unwrap();
+                        println!("{event}");
                     }
                     _ => {}
                 }
@@ -132,8 +139,11 @@ mod example {
                 match message.any_obs_server_message() {
                     Ok(ServerMessage::Response(info)) => {
                         if info.request_id == ":3" {
-                            let data = message.obs_message_data::<AnyResponse>().unwrap();
-                            println!("{:?}", data);
+                            let data = serde_json::to_string_pretty(
+                                &message.obs_message_data::<AnyResponse>().unwrap(),
+                            )
+                            .unwrap();
+                            println!("{data}");
                             break;
                         }
                     }
@@ -146,25 +156,32 @@ mod example {
     }
 
     async fn obs_connect(
-        password: Option<&str>,
+        password: Option<String>,
+        port: Option<String>,
+        host: Option<String>,
     ) -> (WebSocketStream<TokioAdapter<TcpStream>>, u32) {
-        let mut tcp_stream = TcpStream::connect("localhost:4455").await.unwrap();
+        let port = port.unwrap_or_else(|| "4455".to_string());
+        let host = host.unwrap_or_else(|| "localhost".to_string());
+        let mut tcp_stream = TcpStream::connect(&format!("{host}:{port}")).await.unwrap();
         // Asynchronously perform the WebSocket handshake on the (borrowed!) TcpStream,
         // but throw away the resulting WebSocketStream.
         // Alternatively, we could drive the handshake ourselves using the
         // tungstenite::handshake::client module
-        async_tungstenite::client_async("ws://localhost:4455", TokioAdapter::new(&mut tcp_stream))
-            .await
-            .unwrap();
+        async_tungstenite::client_async(
+            &format!("ws://{host}:{port}"),
+            TokioAdapter::new(&mut tcp_stream),
+        )
+        .await
+        .unwrap();
         // Temporarily use a "regular" WebSocket client to drive OBS authentication
         let mut auth = AuthMachine::new_non_blocking(
             WebSocket::from_raw_socket(TokioTcpAdapter::new(&mut tcp_stream), Role::Client, None),
-            password,
+            password.as_deref(),
             None,
         );
         let rpc_version = loop {
             let res = auth.drive();
-            use influencer::auth_machine::DriveResult;
+            use influencer::auth::DriveResult;
             match res {
                 DriveResult::FatalError { error, .. } => panic!("{error}"),
                 DriveResult::Interrupted { cont, .. } => {
