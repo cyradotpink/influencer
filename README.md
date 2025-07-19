@@ -35,4 +35,4 @@ influencer --compact events
 
 ## Library Usage
 
-This is a very thin library. It helps you authenticate with the OBS WebSocket server (using the state machine in the `auth` module), and provides types and basic utilites for creating (/serializing) and deserializing OBS WebSocket protocol messages. Bring your own [`tungstenite`](https://crates.io/crates/tungstenite)`::WebSocket`. Non-blocking sockets are supported – see the `async.rs` example.
+This is a very thin library. It helps you authenticate with the OBS WebSocket server (using the state machine in the `auth` module), and provides types and basic utilites for creating (/serializing) and deserializing OBS WebSocket protocol messages. Bring your own [tungstenite](https://crates.io/crates/tungstenite)`::WebSocket`. Non-blocking sockets are supported – see the `async.rs` example.
